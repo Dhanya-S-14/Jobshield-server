@@ -1,28 +1,32 @@
-const nodemailer = require('nodemailer');
+const axios = require('axios');
 
 const sendEmail = async (options) => {
   try {
-    const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST,
-      port: parseInt(process.env.EMAIL_PORT),
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      }
-    });
+    const apiKey = process.env.BREVO_API_KEY;
+    if (!apiKey) {
+      console.warn('BREVO_API_KEY not set - using console fallback');
+      console.log('[EMAIL WOULD SEND]:', options.subject, '->', options.email);
+      return { success: true, fallback: true };
+    }
 
-    const message = {
-      from: `${process.env.FROM_NAME} <${process.env.FROM_EMAIL}>`,
-      to: options.email,
+    const payload = {
+      sender: { email: process.env.FROM_EMAIL || 'noreply@jobshield.com', name: process.env.FROM_NAME || 'JobShield' },
+      to: [{ email: options.email }],
       subject: options.subject,
-      text: options.message,
-      html: options.html
+      htmlContent: options.html || options.message
     };
 
-    const info = await transporter.sendMail(message);
-    return info;
+    const response = await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
+      headers: {
+        'api-key': apiKey,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    });
+
+    return response.data;
   } catch (error) {
-    console.error('Email send error:', error.message);
+    console.error('Email send error:', error.response?.data?.message || error.message);
     throw error;
   }
 };

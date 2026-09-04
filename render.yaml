@@ -20,5 +20,7 @@ services:
         value: 30d
       - key: JWT_COOKIE_EXPIRE
         value: 30
+      - key: BREVO_API_KEY
+        sync: false
       - key: CLIENT_URL
         value: "*"
