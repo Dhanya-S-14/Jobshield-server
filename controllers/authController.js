@@ -6,9 +6,10 @@ const crypto = require('crypto');
 const sendTokenResponse = (user, statusCode, res) => {
   const token = user.getSignedJwtToken();
 
+  const cookieExpire = parseInt(process.env.JWT_COOKIE_EXPIRE) || 30;
   const options = {
     expires: new Date(
-      Date.now() + parseInt(process.env.JWT_COOKIE_EXPIRE) * 24 * 60 * 60 * 1000
+      Date.now() + cookieExpire * 24 * 60 * 60 * 1000
     ),
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production'

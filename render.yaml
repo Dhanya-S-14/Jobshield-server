@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: jobshield-api
+    name: jobshield-server
     runtime: node
     region: oregon
     plan: free
@@ -13,9 +13,9 @@ services:
       - key: PORT
         value: 10000
       - key: MONGO_URI
-        sync: false
+        value: mongodb://dhanya14subramaniam_db_user:Siet2024@ac-7gr0ogb-shard-00-00.luk8rv2.mongodb.net:27017,ac-7gr0ogb-shard-00-01.luk8rv2.mongodb.net:27017,ac-7gr0ogb-shard-00-02.luk8rv2.mongodb.net:27017/jobshield?retryWrites=true&w=majority&ssl=true&authSource=admin
       - key: JWT_SECRET
-        generateValue: true
+        value: jobshield_jwt_secret_key_2024_secure
       - key: JWT_EXPIRE
         value: 30d
       - key: JWT_COOKIE_EXPIRE
