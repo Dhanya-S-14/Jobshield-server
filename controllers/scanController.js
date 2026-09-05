@@ -73,7 +73,10 @@ const scanJob = async (req, res) => {
     res.status(201).json({
       success: true,
       data: {
+        _id: scanRecord._id,
         id: scanRecord._id,
+        jobTitle: scanRecord.jobTitle,
+        companyName: scanRecord.companyName,
         riskScore: detectionResult.riskScore,
         riskLevel: detectionResult.riskLevel,
         aiExplanation: detectionResult.aiExplanation,

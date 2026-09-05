@@ -5,25 +5,38 @@ const analyzeKeywords = (jobTitle, jobDescription, skills) => {
   const skillsStr = Array.isArray(skills) ? skills.join(' ') : (skills || '');
   const text = `${jobTitle} ${jobDescription} ${skillsStr}`.toLowerCase();
   const foundKeywords = [];
-  let totalScore = 0;
 
   for (const entry of scamKeywords) {
-    if (!entry.isActive && entry.isActive !== undefined) continue;
+    if (entry.isActive !== undefined && !entry.isActive) continue;
     const pattern = entry.keyword.toLowerCase();
-    if (text.includes(pattern)) {
+    let matched = false;
+    if (/[\s-]/.test(pattern)) {
+      matched = text.includes(pattern);
+    } else {
+      matched = new RegExp(`\\b${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
+    }
+    if (matched) {
       foundKeywords.push(entry);
-      totalScore += entry.points || 0;
     }
   }
 
+  const strong = foundKeywords.filter(k => (k.points || 0) >= 30);
+  const medium = foundKeywords.filter(k => (k.points || 0) >= 15 && (k.points || 0) < 30);
+  const soft = foundKeywords.filter(k => (k.points || 0) < 15);
+
   let score = 0;
-  if (foundKeywords.length > 0) {
-    if (totalScore >= 100) score = 90;
-    else if (totalScore >= 70) score = 75;
-    else if (totalScore >= 50) score = 60;
-    else if (totalScore >= 30) score = 40;
-    else if (totalScore >= 15) score = 25;
-    else score = 15;
+  if (strong.length > 0) {
+    score = 90;
+  } else if (medium.length >= 3) {
+    score = 65;
+  } else if (medium.length === 2) {
+    score = 40;
+  } else if (medium.length === 1) {
+    score = 15;
+  } else if (soft.length >= 6) {
+    score = 15;
+  } else if (soft.length >= 4) {
+    score = 10;
   }
 
   const moneyKeywords = foundKeywords.filter(k => k.category === 'money').length;
@@ -34,11 +47,12 @@ const analyzeKeywords = (jobTitle, jobDescription, skills) => {
   if (foundKeywords.length === 0) {
     details = 'No scam-related keywords detected in the job posting.';
   } else {
-    details = `Found ${foundKeywords.length} scam-related keyword${foundKeywords.length > 1 ? 's' : ''}. `;
+    details = `Found ${foundKeywords.length} keyword signal${foundKeywords.length > 1 ? 's' : ''}. `;
     if (moneyKeywords > 0) details += `${moneyKeywords} fee/ payment-related keyword${moneyKeywords > 1 ? 's' : ''} detected. `;
     if (investmentKeywords > 0) details += `${investmentKeywords} investment-related keyword${investmentKeywords > 1 ? 's' : ''} detected. `;
-    if (fakeBenefits > 0) details += `${fakeBenefits} fake benefit claim${fakeBenefits > 1 ? 's' : ''} detected. `;
-    details += `Total risk points: ${totalScore}.`;
+    if (fakeBenefits > 0) details += `${fakeBenefits} benefit claim${fakeBenefits > 1 ? 's' : ''} detected. `;
+    const strongKeywords = foundKeywords.filter(k => (k.points || 0) >= 15).map(k => k.keyword);
+    if (strongKeywords.length > 0) details += `Notable signals: ${strongKeywords.join(', ')}.`;
   }
 
   return {
@@ -334,7 +348,7 @@ const analyzeCompanyInfo = async (companyName, location) => {
         details = `Company "${companyExists.name}" found in our database but is not yet verified. Exercise caution.`;
       }
     } else {
-      score = Math.max(score, 20);
+      score = Math.max(score, 15);
       details = `Company "${name}" was not found in our verified company database. This does not necessarily mean it's a scam, but exercise caution with unknown companies.`;
     }
   } catch (error) {
@@ -513,8 +527,8 @@ const analyzeUrgency = (jobDescription) => {
     { pattern: /\binstant\b/gi, weight: 15 },
     { pattern: /\bdeadline\b/gi, weight: 10 },
     { pattern: /\bASAP\b/g, weight: 20 },
-    { pattern: /\bnow\b/gi, weight: 5 },
-    { pattern: /\btoday\b/gi, weight: 5 },
+    { pattern: /\bnow\b/gi, weight: 3 },
+    { pattern: /\btoday\b/gi, weight: 3 },
     { pattern: /\bopportunity\s+of\s+a\s+lifetime\b/gi, weight: 25 },
     { pattern: /\bonce\s+in\s+a\s+lifetime\b/gi, weight: 25 }
   ];
@@ -532,13 +546,13 @@ const analyzeUrgency = (jobDescription) => {
     }
   }
 
-  if (totalUrgencyScore >= 100) {
+  if (totalUrgencyScore >= 120) {
     score = 80;
     details = `Extreme urgency pressure detected. Found ${foundCount} urgency indicators (${foundPhrases.slice(0, 5).join(', ')}...). Scammers create false urgency to bypass your critical thinking.`;
-  } else if (totalUrgencyScore >= 50) {
+  } else if (totalUrgencyScore >= 60) {
     score = 50;
     details = `High urgency pressure detected. Found ${foundCount} urgency indicators. While some urgency is normal, excessive pressure is a scam tactic.`;
-  } else if (totalUrgencyScore >= 20) {
+  } else if (totalUrgencyScore >= 30) {
     score = 25;
     details = `Moderate urgency detected with ${foundCount} urgency-related phrases. Some legitimate positions may be urgent, but stay cautious.`;
   } else if (foundCount > 0) {
@@ -553,21 +567,21 @@ const analyzeUrgency = (jobDescription) => {
 
 const calculateRiskScore = (allResults) => {
   const weights = {
-    keywordAnalysis: 0.25,
-    salaryAnalysis: 0.15,
+    keywordAnalysis: 0.40,
+    salaryAnalysis: 0.10,
     emailAnalysis: 0.10,
     urlAnalysis: 0.10,
-    phoneAnalysis: 0.10,
-    companyAnalysis: 0.10,
-    textQualityAnalysis: 0.10,
-    urgencyAnalysis: 0.10
+    phoneAnalysis: 0.05,
+    companyAnalysis: 0.05,
+    textQualityAnalysis: 0.05,
+    urgencyAnalysis: 0.15
   };
 
   let weightedScore = 0;
   let totalWeight = 0;
 
   for (const [key, weight] of Object.entries(weights)) {
-    if (allResults[key]) {
+    if (allResults[key] && (allResults[key].score || 0) > 10) {
       weightedScore += (allResults[key].score || 0) * weight;
       totalWeight += weight;
     }
