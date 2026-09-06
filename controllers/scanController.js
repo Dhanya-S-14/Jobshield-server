@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const ScanHistory = require('../models/ScanHistory');
 const User = require('../models/User');
 const { analyzeJobPosting } = require('../services/detectionEngine');
@@ -5,6 +6,10 @@ const PDFDocument = require('pdfkit');
 
 const scanJob = async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ success: false, message: 'Database not ready. Please try again in a few seconds.' });
+    }
+
     let {
       jobTitle,
       companyName,
@@ -42,7 +47,11 @@ const scanJob = async (req, res) => {
       skills
     };
 
+    console.log('Scoring started:', { jobTitle, companyName, hasDescription: Boolean(jobDescription) });
+
     const detectionResult = await analyzeJobPosting(scanData);
+
+    console.log(`Scoring result: riskScore=${detectionResult.riskScore} riskLevel=${detectionResult.riskLevel}`);
 
     const scanRecord = await ScanHistory.create({
       user: req.user.id,
@@ -86,7 +95,10 @@ const scanJob = async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Scan failed', error: error.message });
+    console.error('Scan failed:', error);
+    if (error && error.stack) console.error(error.stack);
+    const message = error && error.message ? error.message : String(error);
+    res.status(500).json({ success: false, message: 'Scan failed', error: message });
   }
 };
 

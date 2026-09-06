@@ -1,6 +1,7 @@
+require('dotenv').config();
+
 const express = require('express');
 const http = require('http');
-const dotenv = require('dotenv');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
@@ -9,8 +10,6 @@ const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const connectDB = require('./config/db');
 const routes = require('./routes/index');
-
-dotenv.config();
 
 const app = express();
 

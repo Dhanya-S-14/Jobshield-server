@@ -9,9 +9,9 @@ const {
   getScanStats
 } = require('../controllers/scanController');
 const { protect } = require('../middleware/auth');
-const { validateScanJob } = require('../middleware/validate');
+const { validateScanJob, handleValidationErrors } = require('../middleware/validate');
 
-router.post('/scan', protect, validateScanJob, scanJob);
+router.post('/scan', protect, validateScanJob, handleValidationErrors, scanJob);
 router.get('/history', protect, getScanHistory);
 router.get('/stats', protect, getScanStats);
 router.get('/history/:id', protect, getScanById);

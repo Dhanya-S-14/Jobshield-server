@@ -2,8 +2,8 @@ const scamKeywords = require('../keywords/scamKeywords.json');
 const Company = require('../models/Company');
 
 const analyzeKeywords = (jobTitle, jobDescription, skills) => {
-  const skillsStr = Array.isArray(skills) ? skills.join(' ') : (skills || '');
-  const text = `${jobTitle} ${jobDescription} ${skillsStr}`.toLowerCase();
+  const skillsStr = Array.isArray(skills) ? skills.join(' ') : (typeof skills === 'string' ? skills : '');
+  const text = [jobTitle, jobDescription, skillsStr].filter(v => typeof v === 'string' && v.trim()).join(' ').trim().toLowerCase();
   const foundKeywords = [];
 
   for (const entry of scamKeywords) {
@@ -686,6 +686,11 @@ const generateExplanation = (allResults, riskLevel, keywordsFound) => {
 };
 
 const analyzeJobPosting = async (data) => {
+  const toText = (v) => {
+    if (v === undefined || v === null) return '';
+    return typeof v === 'string' ? v : String(v);
+  };
+
   const {
     jobTitle,
     companyName,
@@ -699,14 +704,14 @@ const analyzeJobPosting = async (data) => {
     skills
   } = data;
 
-  const keywordResult = analyzeKeywords(jobTitle, jobDescription, skills);
-  const salaryResult = analyzeSalary(salary);
-  const emailResult = analyzeEmail(recruiterEmail);
-  const urlResult = analyzeURL(website, applyLink);
-  const phoneResult = analyzePhone(phoneNumber);
-  const companyResult = await analyzeCompanyInfo(companyName, location);
-  const textQualityResult = analyzeTextQuality(jobDescription);
-  const urgencyResult = analyzeUrgency(jobDescription);
+  const keywordResult = analyzeKeywords(toText(jobTitle), toText(jobDescription), skills);
+  const salaryResult = analyzeSalary(toText(salary));
+  const emailResult = analyzeEmail(toText(recruiterEmail));
+  const urlResult = analyzeURL(toText(website), toText(applyLink));
+  const phoneResult = analyzePhone(toText(phoneNumber));
+  const companyResult = await analyzeCompanyInfo(toText(companyName), toText(location));
+  const textQualityResult = analyzeTextQuality(toText(jobDescription));
+  const urgencyResult = analyzeUrgency(toText(jobDescription));
 
   const allResults = {
     keywordAnalysis: keywordResult,
