@@ -1,5 +1,7 @@
 require('dotenv').config();
 
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -137,6 +139,19 @@ app.get('/health', (req, res) => {
     uptime: process.uptime()
   });
 });
+
+// Serve the built web app (PWA) from /public if present
+const webBuildDir = path.join(__dirname, 'public');
+if (fs.existsSync(path.join(webBuildDir, 'index.html'))) {
+  app.use(express.static(webBuildDir));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(webBuildDir, 'index.html'));
+  });
+  console.log(`Web app served from: ${webBuildDir}`);
+} else {
+  console.log('Web app build not found - API only mode');
+}
 
 // 404 handler
 app.use((req, res) => {
