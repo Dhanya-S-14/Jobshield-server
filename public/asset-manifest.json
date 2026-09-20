@@ -1,14 +1,14 @@
 {
   "files": {
     "main.css": "/static/css/main.2f7a2fc9.css",
-    "main.js": "/static/js/main.02230d93.js",
-    "static/media/jobshield-logo.svg": "/static/media/jobshield-logo.986a4549f827b5e3df736a2d5b310ae4.svg",
+    "main.js": "/static/js/main.31824864.js",
+    "static/media/jobshield-logo.svg": "/static/media/jobshield-logo.25d1295ddc60abb20db1399256cf1f8c.svg",
     "index.html": "/index.html",
     "main.2f7a2fc9.css.map": "/static/css/main.2f7a2fc9.css.map",
-    "main.02230d93.js.map": "/static/js/main.02230d93.js.map"
+    "main.31824864.js.map": "/static/js/main.31824864.js.map"
   },
   "entrypoints": [
     "static/css/main.2f7a2fc9.css",
-    "static/js/main.02230d93.js"
+    "static/js/main.31824864.js"
   ]
 }
