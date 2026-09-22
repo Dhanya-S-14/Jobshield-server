@@ -37,7 +37,17 @@
       "expo-image-picker",
       "expo-font",
       "expo-asset",
-      "expo-localization"
+      "expo-localization",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "abiFilters": [
+              "arm64-v8a"
+            ]
+          }
+        }
+      ]
     ],
     "extra": {
       "eas": {
