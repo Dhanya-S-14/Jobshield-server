@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import { File } from 'expo-file-system';
 import api from './api';
 
 const getMimeType = (uri) => {
@@ -21,8 +21,8 @@ const getMimeType = (uri) => {
 
 export const extractTextFromImage = async (imageUri) => {
   try {
-    const fileInfo = await FileSystem.getInfoAsync(imageUri);
-    if (!fileInfo.exists) {
+    const file = new File(imageUri);
+    if (!file.exists) {
       throw new Error('Image file not found');
     }
 

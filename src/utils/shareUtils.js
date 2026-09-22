@@ -1,5 +1,4 @@
 import { Share, Platform, Alert } from 'react-native';
-import * as FileSystem from 'expo-file-system';
 
 export const shareScanResult = async (result) => {
   const riskLevel = result.riskScore <= 20 ? 'Safe' : result.riskScore <= 50 ? 'Suspicious' : 'Scam';
