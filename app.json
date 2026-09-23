@@ -54,6 +54,11 @@
         "projectId": "8177c88b-5c3b-47ca-98d7-682e5f2f5a11"
       }
     },
+    "updates": {
+      "url": "https://u.expo.dev/8177c88b-5c3b-47ca-98d7-682e5f2f5a11",
+      "enabled": true,
+      "fallbackToCacheTimeout": 0
+    },
     "owner": "dhanyas14"
   }
 }
