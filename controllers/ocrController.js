@@ -4,6 +4,8 @@ const { createWorker } = require('tesseract.js');
 const TESSDATA_PATH = path.join(__dirname, '..', 'tessdata');
 
 let ocrChain = Promise.resolve();
+let persistentWorker = null;
+let workerReady = false;
 
 const runExclusive = (fn) => {
   const run = ocrChain.then(fn, fn);
@@ -31,13 +33,11 @@ const createOcrWorker = async () => {
   return worker;
 };
 
-const terminateWorker = async (worker) => {
-  if (!worker) return;
-  try {
-    await worker.terminate();
-  } catch (err) {
-    console.warn('Failed to terminate OCR worker:', err && err.message ? err.message : err);
-  }
+const getWorker = async () => {
+  if (persistentWorker && workerReady) return persistentWorker;
+  persistentWorker = await createOcrWorker();
+  workerReady = true;
+  return persistentWorker;
 };
 
 const preprocessImage = async (buffer, strong = false) => {
@@ -79,7 +79,6 @@ const preprocessImage = async (buffer, strong = false) => {
 };
 
 const extractText = async (req, res) => {
-  let worker;
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No image file provided' });
@@ -91,25 +90,37 @@ const extractText = async (req, res) => {
     console.log('Image preprocessed, running OCR...');
 
     const result = await runExclusive(async () => {
-      worker = await createOcrWorker();
-      const { data } = await worker.recognize(preprocessed);
+      let worker = await getWorker();
+      try {
+        const { data } = await worker.recognize(preprocessed, {}, { timeout: 45000 });
 
-      let text = data.text || '';
-      let confidence = data.confidence || 0;
-      console.log(`OCR result: pass 1 -> ${Math.round(confidence)}% confidence, ${(text || '').trim().length} chars`);
+        let text = data.text || '';
+        let confidence = data.confidence || 0;
+        console.log(`OCR result: pass 1 -> ${Math.round(confidence)}% confidence, ${(text || '').trim().length} chars`);
 
-      if (confidence < 60 && text.trim().length < 30) {
-        console.log('Low confidence, retrying with strong preprocessing...');
-        const strongPreprocessed = await preprocessImage(req.file.buffer, true);
-        const { data: retry } = await worker.recognize(strongPreprocessed);
-        console.log(`OCR result: pass 2 -> ${Math.round(retry.confidence)}% confidence, ${(retry.text || '').trim().length} chars`);
-        if (retry.confidence > confidence || (retry.text || '').trim().length > text.trim().length) {
-          text = retry.text || '';
-          confidence = retry.confidence || 0;
+        if (confidence < 60 && text.trim().length < 30) {
+          console.log('Low confidence, retrying with strong preprocessing...');
+          const strongPreprocessed = await preprocessImage(req.file.buffer, true);
+          const { data: retry } = await worker.recognize(strongPreprocessed, {}, { timeout: 45000 });
+          console.log(`OCR result: pass 2 -> ${Math.round(retry.confidence)}% confidence, ${(retry.text || '').trim().length} chars`);
+          if (retry.confidence > confidence || (retry.text || '').trim().length > text.trim().length) {
+            text = retry.text || '';
+            confidence = retry.confidence || 0;
+          }
         }
-      }
 
-      return { text, confidence };
+        return { text, confidence };
+      } catch (err) {
+        console.error('OCR recognize failed, recreating worker:', err && err.message ? err.message : err);
+        workerReady = false;
+        if (persistentWorker) {
+          try { await persistentWorker.terminate(); } catch (e) { /* ignore */ }
+          persistentWorker = null;
+        }
+        worker = await getWorker();
+        const { data } = await worker.recognize(preprocessed);
+        return { text: data.text || '', confidence: data.confidence || 0 };
+      }
     });
 
     text = result.text
@@ -140,12 +151,17 @@ const extractText = async (req, res) => {
       error: error && error.message ? error.message : String(error),
     });
   } finally {
-    await terminateWorker(worker);
+    // Persistent worker is kept alive between requests for speed; nothing to clean per-request.
   }
 };
 
 const cleanup = async () => {
-  console.log('OCR cleanup: no persistent workers to terminate');
+  console.log('OCR cleanup: terminating persistent worker');
+  if (persistentWorker) {
+    try { await persistentWorker.terminate(); } catch (e) { /* ignore */ }
+    persistentWorker = null;
+    workerReady = false;
+  }
 };
 
 process.on('SIGINT', cleanup);
