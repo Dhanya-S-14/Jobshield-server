@@ -13,6 +13,7 @@ import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
 import RiskScoreCircle from '../../components/common/RiskScoreCircle';
 import RiskBadge from '../../components/common/RiskBadge';
+import CompanyVerificationBlock from './CompanyVerificationBlock';
 import { getRiskLevel } from '../../utils/helpers';
 
 const PARSED_FIELDS = [
@@ -192,6 +193,7 @@ const ScreenshotScanScreen = ({ navigation }) => {
               {result.analysis?.explanation || result.explanation || t('noDetailedExplanation')}
             </Text>
           </Card>
+          <CompanyVerificationBlock verification={result.companyVerification} />
           <View style={styles.resultActions}>
             <Button title="Scan Another" icon="refresh-outline" variant="outline" onPress={resetAll} style={styles.resultBtn} />
           </View>

@@ -16,6 +16,7 @@ import ConfirmDialog from '../../components/common/ConfirmDialog';
 import Loader from '../../components/common/Loader';
 import { CommentSection } from '../../components/comments/Comments';
 import { ScanWarnings } from '../../components/warning/WarningBanner';
+import CompanyVerificationBlock from './CompanyVerificationBlock';
 
 const ScanDetailScreen = ({ route, navigation }) => {
   const { colors } = useTheme();
@@ -188,6 +189,8 @@ const ScanDetailScreen = ({ route, navigation }) => {
             </View>
           )}
         </Card>
+
+        <CompanyVerificationBlock verification={scan.companyVerification} />
 
         <ScanWarnings companyName={scan.companyName} jobDescription={scan.jobDescription} />
 

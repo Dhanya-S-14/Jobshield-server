@@ -10,6 +10,7 @@ import RiskScoreCircle from '../../components/common/RiskScoreCircle';
 import RiskBadge from '../../components/common/RiskBadge';
 import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
+import CompanyVerificationBlock from './CompanyVerificationBlock';
 import { getRiskLevel, getRiskLabel } from '../../utils/helpers';
 
 const JOB_TYPES = ['Full-time', 'Part-time', 'Contract', 'Freelance', 'Internship', 'Remote'];
@@ -144,6 +145,8 @@ const ScannerScreen = ({ navigation, route }) => {
               ))}
             </Card>
           )}
+
+          <CompanyVerificationBlock verification={result.companyVerification} />
 
           <View style={styles.actionRow}>
             <Button title={t('saveResult')} icon="bookmark-outline" variant="primary" onPress={handleSave} loading={saving} style={styles.actionBtn} />
