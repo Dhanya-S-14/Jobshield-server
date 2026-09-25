@@ -11,6 +11,7 @@ const mongoSanitize = require('express-mongo-sanitize');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const connectDB = require('./config/db');
+const { syncTrustedCompanies } = require('./services/companySeedSync');
 const routes = require('./routes/index');
 
 const app = express();
@@ -40,6 +41,9 @@ const xssClean = (req, res, next) => {
 connectDB().then((connected) => {
   if (!connected) {
     console.log('Starting server in limited mode (no database)');
+  } else {
+    // Keep trusted companies in the DB in sync with the deterministic registry.
+    syncTrustedCompanies().catch((e) => console.error('[boot] company sync error:', e && e.message));
   }
 });
 

@@ -3,53 +3,88 @@ const mongoose = require('mongoose');
 const CompanySchema = new mongoose.Schema({
   name: {
     type: String,
-    required: [true, 'Please provide a company name'],
+    required: [true, 'Company name is required'],
     unique: true,
+    trim: true,
+    maxlength: [100, 'Company name cannot exceed 100 characters']
+  },
+  registeredName: {
+    type: String,
+    trim: true
+  },
+  aliases: {
+    type: [String],
+    default: [],
+    index: true
+  },
+  shortName: {
+    type: String,
     trim: true
   },
   website: {
     type: String,
-    default: ''
+    trim: true
   },
-  domain: {
+  domain: String,
+  officialDomain: {
     type: String,
-    default: ''
+    trim: true,
+    index: true
   },
-  industry: {
+  officialWebsite: {
     type: String,
-    default: ''
+    trim: true
   },
-  location: {
+  careersUrl: {
     type: String,
-    default: ''
+    trim: true
   },
-  description: {
+  industry: String,
+  location: String,
+  country: String,
+  companyType: {
     type: String,
-    default: ''
+    enum: ['MNC', 'Startup', 'Bank', 'Govt', 'Enterprise', 'Other'],
+    default: 'Enterprise'
   },
+  description: String,
+  logo: String,
   verified: {
     type: Boolean,
     default: false
   },
-  verificationDate: {
-    type: Date
+  knownLegitimateCompany: {
+    type: Boolean,
+    default: false
   },
-  employeeCount: {
+  verificationLevel: {
     type: String,
-    default: ''
+    enum: ['enterprise-verified', 'domain-verified', 'identity-verified', 'unverified', 'unknown'],
+    default: 'unverified'
   },
-  foundedYear: {
-    type: Number
+  trustScore: {
+    type: Number,
+    min: 0,
+    max: 100,
+    default: 0
   },
-  logo: {
+  officialDatabaseMatch: {
+    type: Boolean,
+    default: false
+  },
+  source: {
     type: String,
-    default: ''
+    default: 'database'
   },
+  verificationDate: Date,
+  employees: Number,
+  founded: Number,
+  employeeCount: Number,
+  foundedYear: Number,
   socialLinks: {
     linkedin: String,
     twitter: String,
-    facebook: String,
-    glassdoor: String
+    facebook: String
   },
   createdAt: {
     type: Date,
@@ -57,6 +92,5 @@ const CompanySchema = new mongoose.Schema({
   }
 });
 
-CompanySchema.index({ name: 'text', domain: 'text' });
-
+// prevent duplicate trusted records: one slug of the normalized name
 module.exports = mongoose.model('Company', CompanySchema);

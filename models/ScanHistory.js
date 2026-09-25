@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { Schema } = mongoose;
 
 const ScanHistorySchema = new mongoose.Schema({
   user: {
@@ -66,49 +67,43 @@ const ScanHistorySchema = new mongoose.Schema({
     max: 100,
     required: true
   },
+  trustScore: {
+    type: Number,
+    min: 0,
+    max: 100,
+    default: null
+  },
   riskLevel: {
     type: String,
-    enum: ['Safe', 'Suspicious', 'Scam'],
+    enum: ['Highly Trusted', 'Low Risk', 'Moderate Risk', 'High Risk', 'Critical Risk'],
     required: true
   },
+  verification: {
+    type: Schema.Types.Mixed,
+    default: null
+  },
+  companyVerification: {
+    type: Schema.Types.Mixed,
+    default: null
+  },
+  evidence: [{
+    factor: { type: String, default: '' },
+    type: { type: String, default: '' },
+    message: { type: String, default: '' }
+  }],
+  warnings: [{
+    type: String
+  }],
+  breakdown: [{
+    type: Schema.Types.Mixed
+  }],
   aiExplanation: {
     type: String,
     required: true
   },
   scanResults: {
-    keywordAnalysis: {
-      score: Number,
-      keywordsFound: [String],
-      details: String
-    },
-    salaryAnalysis: {
-      score: Number,
-      details: String
-    },
-    emailAnalysis: {
-      score: Number,
-      details: String
-    },
-    urlAnalysis: {
-      score: Number,
-      details: String
-    },
-    phoneAnalysis: {
-      score: Number,
-      details: String
-    },
-    companyAnalysis: {
-      score: Number,
-      details: String
-    },
-    textQualityAnalysis: {
-      score: Number,
-      details: String
-    },
-    urgencyAnalysis: {
-      score: Number,
-      details: String
-    }
+    type: Schema.Types.Mixed,
+    default: {}
   },
   keywordsFound: [{
     keyword: String,

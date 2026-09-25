@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
   scanJob,
+  analyzeJob,
   getScanHistory,
   getScanById,
   deleteScan,
@@ -10,6 +11,9 @@ const {
 } = require('../controllers/scanController');
 const { protect } = require('../middleware/auth');
 const { validateScanJob, handleValidationErrors } = require('../middleware/validate');
+
+// Public, non-persisting analysis for trial/guest users
+router.post('/analyze', validateScanJob, handleValidationErrors, analyzeJob);
 
 router.post('/scan', protect, validateScanJob, handleValidationErrors, scanJob);
 router.get('/history', protect, getScanHistory);

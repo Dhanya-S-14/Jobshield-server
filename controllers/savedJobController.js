@@ -51,7 +51,7 @@ const getSavedJobs = async (req, res) => {
         .limit(limit)
         .populate({
           path: 'scanHistory',
-          select: 'jobTitle companyName riskScore riskLevel location salary createdAt'
+          select: 'jobTitle companyName riskScore trustScore riskLevel location salary createdAt'
         }),
       SavedJob.countDocuments({ user: req.user.id })
     ]);

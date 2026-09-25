@@ -2,7 +2,36 @@ const mongoose = require('mongoose');
 const ScanHistory = require('../models/ScanHistory');
 const User = require('../models/User');
 const { analyzeJobPosting } = require('../services/detectionEngine');
+const { getCompanyVerification } = require('../services/companyVerifier');
 const PDFDocument = require('pdfkit');
+
+const normalizeScanBody = (body) => {
+  const {
+    jobTitle, companyName, jobDescription, salary, location, jobType,
+    recruiterName, recruiterEmail, phoneNumber, website, experienceLevel,
+    experience, skills, applyLink
+  } = body;
+
+  let exp = experience || experienceLevel || undefined;
+  let type = undefined;
+  if (jobType) type = String(jobType).toLowerCase();
+
+  return {
+    jobTitle, companyName, jobDescription, salary: salary || '',
+    location: location || '', jobType: type, recruiterName,
+    recruiterEmail: recruiterEmail || '', phoneNumber: phoneNumber || '',
+    website: website || '', applyLink: applyLink || '', experience: exp,
+    skills
+  };
+};
+
+const detect = async (normalized) => {
+  const { jobTitle, companyName, jobDescription, salary, location, recruiterEmail, phoneNumber, website, applyLink, skills } = normalized;
+  return analyzeJobPosting({
+    jobTitle, companyName, jobDescription, salary, location,
+    recruiterEmail, phoneNumber, website, applyLink, skills
+  });
+};
 
 const scanJob = async (req, res) => {
   try {
@@ -10,48 +39,22 @@ const scanJob = async (req, res) => {
       return res.status(503).json({ success: false, message: 'Database not ready. Please try again in a few seconds.' });
     }
 
-    let {
-      jobTitle,
-      companyName,
-      jobDescription,
-      salary,
-      location,
-      jobType,
-      recruiterName,
-      recruiterEmail,
-      phoneNumber,
-      website,
-      experienceLevel,
-      experience,
-      skills,
-      applyLink
-    } = req.body;
-
-    experience = experience || experienceLevel;
-    if (jobType) {
-      jobType = jobType.toLowerCase();
-    } else {
-      jobType = undefined;
-    }
-
-    const scanData = {
-      jobTitle,
-      companyName,
-      jobDescription,
-      salary,
-      location,
-      recruiterEmail,
-      phoneNumber,
-      website,
-      applyLink,
-      skills
-    };
+    const normalized = normalizeScanBody(req.body);
+    const {
+      jobTitle, companyName, jobDescription, salary, location, jobType,
+      recruiterName, recruiterEmail, phoneNumber, website, applyLink, experience, skills
+    } = normalized;
 
     console.log('Scoring started:', { jobTitle, companyName, hasDescription: Boolean(jobDescription) });
 
-    const detectionResult = await analyzeJobPosting(scanData);
+    const detectionResult = await detect(normalized);
 
-    console.log(`Scoring result: riskScore=${detectionResult.riskScore} riskLevel=${detectionResult.riskLevel}`);
+    console.log(`Scoring result: trust=${detectionResult.trustScore} risk=${detectionResult.riskScore} level=${detectionResult.riskLevel}`);
+
+    const companyVerification = await getCompanyVerification(normalized).catch((e) => {
+      console.error('Company verification failed:', e && e.message);
+      return null;
+    });
 
     const scanRecord = await ScanHistory.create({
       user: req.user.id,
@@ -69,9 +72,27 @@ const scanJob = async (req, res) => {
       skills,
       applyLink,
       riskScore: detectionResult.riskScore,
+      trustScore: detectionResult.trustScore,
       riskLevel: detectionResult.riskLevel,
+      verification: detectionResult.verification,
+      companyVerification,
+      evidence: detectionResult.evidence,
+      warnings: detectionResult.warnings,
+      breakdown: detectionResult.breakdown,
       aiExplanation: detectionResult.aiExplanation,
-      scanResults: detectionResult.details,
+      scanResults: {
+        trustScore: detectionResult.trustScore,
+        riskScore: detectionResult.riskScore,
+        riskLevel: detectionResult.riskLevel,
+        verdict: detectionResult.verdict,
+        aiExplanation: detectionResult.aiExplanation,
+        verification: detectionResult.verification,
+        companyVerification,
+        evidence: detectionResult.evidence,
+        warnings: detectionResult.warnings,
+        breakdown: detectionResult.breakdown,
+        details: detectionResult.details
+      },
       keywordsFound: detectionResult.keywordsFound
     });
 
@@ -87,8 +108,15 @@ const scanJob = async (req, res) => {
         jobTitle: scanRecord.jobTitle,
         companyName: scanRecord.companyName,
         riskScore: detectionResult.riskScore,
+        trustScore: detectionResult.trustScore,
         riskLevel: detectionResult.riskLevel,
+        verdict: detectionResult.verdict,
         aiExplanation: detectionResult.aiExplanation,
+        verification: detectionResult.verification,
+        companyVerification,
+        evidence: detectionResult.evidence,
+        warnings: detectionResult.warnings,
+        breakdown: detectionResult.breakdown,
         keywordsFound: detectionResult.keywordsFound,
         details: detectionResult.details,
         createdAt: scanRecord.createdAt
@@ -102,6 +130,25 @@ const scanJob = async (req, res) => {
   }
 };
 
+/**
+ * Public (no-auth) analysis endpoint — used by trial users and the web client
+ * so the machine-learning-free, deterministic engine always runs server-side.
+ * Nothing is persisted here.
+ */
+const analyzeJob = async (req, res) => {
+  try {
+    const normalized = normalizeScanBody(req.body || {});
+    const result = await detect(normalized);
+    const companyVerification = await getCompanyVerification(normalized).catch(() => null);
+    result.companyVerification = companyVerification;
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    console.error('Analyze failed:', error);
+    const message = error && error.message ? error.message : String(error);
+    res.status(500).json({ success: false, message: 'Analysis failed', error: message });
+  }
+};
+
 const getScanHistory = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -111,7 +158,8 @@ const getScanHistory = async (req, res) => {
     const riskLevel = req.query.riskLevel;
 
     const query = { user: req.user.id };
-    if (riskLevel && ['Safe', 'Suspicious', 'Scam'].includes(riskLevel)) {
+    const LEVELS = ['Highly Trusted', 'Low Risk', 'Moderate Risk', 'High Risk', 'Critical Risk'];
+    if (riskLevel && LEVELS.includes(riskLevel)) {
       query.riskLevel = riskLevel;
     }
 
@@ -204,14 +252,12 @@ const exportHistoryPDF = async (req, res) => {
     if (scans.length === 0) {
       doc.fontSize(14).text('No scan history available.', { align: 'center' });
     } else {
-      const safeCount = scans.filter(s => s.riskLevel === 'Safe').length;
-      const suspiciousCount = scans.filter(s => s.riskLevel === 'Suspicious').length;
-      const scamCount = scans.filter(s => s.riskLevel === 'Scam').length;
-
       doc.fontSize(12).font('Helvetica-Bold').text('Summary');
       doc.fontSize(10).font('Helvetica');
       doc.text(`Total Scans: ${scans.length}`);
-      doc.text(`Safe: ${safeCount} | Suspicious: ${suspiciousCount} | Scam: ${scamCount}`);
+      const countBy = {};
+      for (const s of scans) countBy[s.riskLevel] = (countBy[s.riskLevel] || 0) + 1;
+      doc.text('Breakdown: ' + Object.keys(countBy).map((k) => `${k}: ${countBy[k]}`).join(' | '));
       doc.moveDown();
 
       doc.fontSize(12).font('Helvetica-Bold').text('Scan Details');
@@ -222,15 +268,17 @@ const exportHistoryPDF = async (req, res) => {
           doc.addPage();
         }
 
-        const riskColor = scan.riskLevel === 'Safe' ? '#059669' :
-          scan.riskLevel === 'Suspicious' ? '#D97706' : '#DC2626';
+        const riskColor = scan.riskLevel === 'Highly Trusted' ? '#059669' :
+          scan.riskLevel === 'Low Risk' ? '#10b981' :
+          scan.riskLevel === 'Moderate Risk' ? '#D97706' :
+          scan.riskLevel === 'High Risk' ? '#DC6803' : '#DC2626';
 
         doc.fontSize(11).font('Helvetica-Bold').fillColor('#1F2937')
           .text(`Job: ${scan.jobTitle}`);
         doc.fontSize(10).font('Helvetica').fillColor('#4B5563')
           .text(`Company: ${scan.companyName}`);
         doc.fillColor(riskColor)
-          .text(`Risk: ${scan.riskLevel} (${scan.riskScore}/100)`);
+          .text(`Level: ${scan.riskLevel} (Risk ${scan.riskScore}/100 | Trust ${scan.trustScore !== null && scan.trustScore !== undefined ? scan.trustScore : 100 - scan.riskScore}/100)`);
         doc.fillColor('#4B5563')
           .text(`Date: ${new Date(scan.createdAt).toLocaleDateString()}`)
           .text(`Location: ${scan.location || 'N/A'}`)
@@ -252,17 +300,36 @@ const exportHistoryPDF = async (req, res) => {
 const getScanStats = async (req, res) => {
   try {
     const userId = req.user.id;
-    const [total, safe, suspicious, scam] = await Promise.all([
-      ScanHistory.countDocuments({ user: userId }),
-      ScanHistory.countDocuments({ user: userId, riskLevel: 'Safe' }),
-      ScanHistory.countDocuments({ user: userId, riskLevel: 'Suspicious' }),
-      ScanHistory.countDocuments({ user: userId, riskLevel: 'Scam' }),
+    const LEVELS = ['Highly Trusted', 'Low Risk', 'Moderate Risk', 'High Risk', 'Critical Risk'];
+
+    const agg = await ScanHistory.aggregate([
+      { $match: { user: userId } },
+      { $group: { _id: '$riskLevel', count: { $sum: 1 } } }
     ]);
 
-    res.status(200).json({
-      success: true,
-      data: { total, safe, suspicious, scam }
-    });
+    const levelCounts = {};
+    let total = 0;
+    for (const row of agg) {
+      levelCounts[row._id] = row.count;
+      total += row.count;
+    }
+
+    const data = {
+      total,
+      // detailed breakdown per new tier
+      levels: LEVELS.map((l) => ({ level: l, count: levelCounts[l] || 0 })),
+      // legacy buckets for dashboards that still expect safe/suspicious/scam
+      highlyTrusted: levelCounts['Highly Trusted'] || 0,
+      lowRisk: levelCounts['Low Risk'] || 0,
+      moderateRisk: levelCounts['Moderate Risk'] || 0,
+      highRisk: levelCounts['High Risk'] || 0,
+      criticalRisk: levelCounts['Critical Risk'] || 0,
+      safe: (levelCounts['Highly Trusted'] || 0) + (levelCounts['Low Risk'] || 0),
+      suspicious: (levelCounts['Moderate Risk'] || 0) + (levelCounts['High Risk'] || 0),
+      scam: levelCounts['Critical Risk'] || 0
+    };
+
+    res.status(200).json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to get stats', error: error.message });
   }
@@ -270,6 +337,7 @@ const getScanStats = async (req, res) => {
 
 module.exports = {
   scanJob,
+  analyzeJob,
   getScanHistory,
   getScanById,
   deleteScan,

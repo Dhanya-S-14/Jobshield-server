@@ -1,762 +1,1052 @@
+/**
+ * JobShield Detection Engine
+ *
+ * Evidence-based TRUST SCORING (0–100).
+ *
+ *   Trust Score  : how trustworthy the posting is (0 = trustworthy, evidence only)
+ *   Risk Score   : 100 – Trust Score
+ *
+ * Classification thresholds:
+ *   90–100  Highly Trusted
+ *   75–89   Low Risk
+ *   50–74   Moderate Risk
+ *   25–49   High Risk
+ *   0–24    Critical Risk
+ *
+ * Nine weighted, explainable factors. Each factor may add or subtract up to its
+ * `weight` from the neutral midpoint (50). Missing information is treated as
+ * NEUTRAL (no penalty, no credit) — we never penalize data the user did not give.
+ *
+ * CRITICAL PRINCIPLES
+ *   - A real company name is NOT proof the job is real (REAL COMPANY != REAL JOB).
+ *   - Gmail / free email is a warning, never an automatic scam verdict.
+ *   - We never fake verification results or inflate scores for famous brands.
+ *   - When verification is impossible we say "Official source could not be
+ *     independently verified."
+ */
+
 const scamKeywords = require('../keywords/scamKeywords.json');
+const {
+  lookupCompany,
+  allDomainsFor,
+  levenshtein,
+  normalizeName
+} = require('../config/companies');
 const Company = require('../models/Company');
 
-const analyzeKeywords = (jobTitle, jobDescription, skills) => {
-  const skillsStr = Array.isArray(skills) ? skills.join(' ') : (typeof skills === 'string' ? skills : '');
-  const text = [jobTitle, jobDescription, skillsStr].filter(v => typeof v === 'string' && v.trim()).join(' ').trim().toLowerCase();
-  const foundKeywords = [];
+/* -------------------------------------------------------------------------- */
+/* Small utilities                                                            */
+/* -------------------------------------------------------------------------- */
 
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+const toText = (v) => {
+  if (v === undefined || v === null) return '';
+  return typeof v === 'string' ? v : String(v);
+};
+
+const clean = (v) => toText(v).toLowerCase().replace(/\s+/g, ' ').trim();
+
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'live.com', 'aol.com',
+  'mail.com', 'protonmail.com', 'proton.me', 'yandex.com', 'zoho.com',
+  'rediffmail.com', 'gmx.com', 'icloud.com', 'msn.com', 'inbox.com', 'fastmail.com'
+]);
+
+const DISPOSABLE_DOMAINS = ['tempmail', 'temp-mail', 'guerrillamail', 'mailinator', 'throwaway', 'disposable', 'yopmail', '10minutemail', 'sharklasers', 'maildrop'];
+
+const SUSPICIOUS_TLDS = new Set([
+  'xyz', 'top', 'club', 'online', 'site', 'work', 'click', 'link', 'download',
+  'review', 'buzz', 'fun', 'icu', 'gq', 'ml', 'cf', 'tk', 'cam', 'stream',
+  'trade', 'webcam', 'science', 'party', 'racing', 'date', 'faith', 'men',
+  'loan', 'win', 'bid', 'accountant', 'country', 'mom', 'pro', 'live', 'info', 'cc'
+]);
+
+const SHORTENERS = new Set([
+  'bit.ly', 'tinyurl.com', 'goo.gl', 'ow.ly', 'cutt.ly', 'rb.gy', 'is.gd',
+  't.co', 'tiny.cc', 'bit.do', 'shorturl.at', 'buff.ly', 'rebrand.ly', 'lnkd.in'
+]);
+
+const FREE_HOSTING = ['blogspot', 'wordpress', 'wix', 'weebly', 'squarespace', 'shopify', 'blogger', 'godaddysites'];
+
+const parseHostname = (url) => {
+  if (!url || !url.trim()) return null;
+  let u = url.trim();
+  if (!/^https?:\/\//i.test(u)) {
+    if (u.indexOf('://') !== -1) return null; // other protocol — reject
+    u = 'https://' + u;
+  }
+  let hostname;
+  try {
+    hostname = new URL(u).hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return null;
+  }
+  if (!hostname) return null;
+  const withoutWww = hostname.startsWith('www.') ? hostname.slice(4) : hostname;
+  const labels = withoutWww.split('.');
+  const tld = labels.length > 1 ? labels[labels.length - 1] : '';
+  const base = labels.length > 1 ? labels[labels.length - 2] : labels[0];
+  return { hostname: withoutWww, tld, base, originalUrl: u, isHttps: /^https:\/\//i.test(u) };
+};
+
+const hasSuspiciousTLD = (host) => {
+  const tld = host.split('.').pop();
+  return SUSPICIOUS_TLDS.has(tld);
+};
+
+const isShortener = (host) => SHORTENERS.has(host) || Array.from(SHORTENERS).some((s) => host.includes(s));
+
+const isFreeHosting = (host) => FREE_HOSTING.some((f) => host.includes(f));
+
+const isOfficialMatch = (hostname, company) => {
+  if (!company) return false;
+  if (!hostname) return false;
+  return allDomainsFor(company).some((d) => hostname === d || hostname.endsWith('.' + d));
+};
+
+/**
+ * Detect domain impersonation (typosquatting) of a known company domain.
+ * true  = "tcscom.xyz", "tcs-jobs.top", "tcs.com-careers.xyz", "mytcsjobs.com"
+ * false = official match or completely unrelated
+ */
+const detectTyposquat = (hostname, company) => {
+  if (!company || !hostname) return null;
+  if (isOfficialMatch(hostname, company)) return null;
+
+  const domains = allDomainsFor(company);
+  for (const d of domains) {
+    const dBase = d.split('.')[0];
+    const hBase = hostname.split('.')[0];
+    const hHost = hostname;
+
+    // "tcs.com-careers.xyz" : hostname starts with official domain + extra
+    if (hHost.startsWith(d + '-') || hHost.startsWith(d + '.') || hHost.endsWith('-' + d)) {
+      return d;
+    }
+    // "tcsjobs.top" / "mytcs.com" / "tcs-careers.xyz"
+    const contains = hBase.includes(dBase) && hBase !== dBase;
+    const similar = levenshtein(dBase, hBase) <= 2 && hBase !== dBase;
+    const suspiciousTld = hasSuspiciousTLD(hHost);
+    if ((contains || similar) || (suspiciousTld && (hHost.includes(dBase)))) {
+      return d;
+    }
+  }
+  return null;
+};
+
+const mapStatusToRiskScore = (status) => {
+  switch (status) {
+    case 'danger': return 85;
+    case 'warning': return 50;
+    case 'positive': return 8;
+    default: return 15; // neutral
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/* Company verification (weight 25)                                           */
+/* -------------------------------------------------------------------------- */
+
+const analyzeCompanyVerification = (companyName, website, applyLink) => {
+  const name = toText(companyName).trim();
+  const urlHosts = [website, applyLink]
+    .map(parseHostname)
+    .filter(Boolean);
+
+  const result = {
+    key: 'companyVerification',
+    label: 'Company Verification',
+    weight: 25,
+    earned: 0,
+    status: 'neutral',
+    summary: '',
+    details: [],
+    verification: {
+      companyVerified: false,
+      identityMatched: false,
+      domainMatched: false,
+      typosquatDetected: false,
+      typosquatOf: null,
+      officialDomain: '',
+      providedHostname: urlHosts[0] ? urlHosts[0].hostname : '',
+      claimedCompany: name,
+      message: '',
+      notes: []
+    }
+  };
+
+  if (!name) {
+    result.summary = 'No company name provided.';
+    result.details.push('Not provided — treated as neutral, no penalty.');
+    return result;
+  }
+
+  const company = lookupCompany(name);
+
+  if (company) {
+    result.verification.companyVerified = true;
+    result.verification.identityMatched = true;
+    result.verification.officialDomain = company.domain;
+    result.verification.claimedCompany = company.name;
+    result.earned = 12;
+    result.status = 'positive';
+    result.summary = `Company "${company.name}" is a recognized employer in JobShield's verified registry.`;
+    result.details.push(`Company name "${name}" matches verified employer "${company.name}".`);
+
+    if (urlHosts.length === 0) {
+      result.verification.domainMatched = false;
+      result.details.push('No website or apply link was provided, so the posting could not be linked to an official domain.');
+      result.details.push('Official source could not be independently verified.');
+      result.verification.notes.push('Official source could not be independently verified.');
+      result.earned = 8;
+      result.status = 'neutral';
+      return result;
+    }
+
+    const official = urlHosts.find((h) => isOfficialMatch(h.hostname, company));
+    if (official) {
+      result.verification.domainMatched = true;
+      result.earned = 25;
+      result.status = 'positive';
+      result.summary += ' The posting URL matches the official domain.';
+      result.details.push(`URL hostname "${official.hostname}" matches official domain "${official.hostname}".`);
+      return result;
+    }
+
+    const typo = urlHosts.map((h) => detectTyposquat(h.hostname, company)).find(Boolean);
+    if (typo) {
+      result.verification.typosquatDetected = true;
+      result.verification.typosquatOf = typo;
+      result.earned = -20;
+      result.status = 'danger';
+      result.summary = `A URL in this posting impersonates "${company.name}".`;
+      result.details.push(`Typosquatting detected: the provided domain resembles the official domain "${typo}".`);
+      result.details.push(`Official domain is "${company.domain}". Real job postings link to the official careers site.`);
+      return result;
+    }
+
+    result.verification.domainMatched = false;
+    result.earned = -7;
+    result.status = 'warning';
+    result.summary = 'Company name matches a real employer, but the posting URL does not use its official domain.';
+    result.details.push('A real company name combined with an unrelated website is a classic impersonation pattern.');
+    result.details.push(`Official domain is "${company.domain}".`);
+    return result;
+  }
+
+  result.summary = `Company "${name}" was not found in JobShield's verified company registry.`;
+  result.details.push('Not being in our registry does not prove it is a scam, but it cannot be independently verified.');
+  result.details.push('Official source could not be independently verified.');
+  result.verification.message = 'Not independently verifiable';
+  result.verification.notes.push('Official source could not be independently verified.');
+
+  if (urlHosts.some((h) => hasSuspiciousTLD(h.hostname))) {
+    result.earned = -6;
+    result.status = 'warning';
+    result.details.push('The provided website uses a cheap, commonly-abused top-level domain.');
+  }
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Job source / URL legitimacy (weight 20)                                    */
+/* -------------------------------------------------------------------------- */
+
+const analyzeJobSource = (website, applyLink, company) => {
+  const urlHosts = [website, applyLink].map(parseHostname).filter(Boolean);
+  const result = {
+    key: 'jobSource',
+    label: 'Job Source / URL',
+    weight: 20,
+    earned: 0,
+    status: 'neutral',
+    summary: '',
+    details: []
+  };
+
+  if (urlHosts.length === 0) {
+    result.summary = 'No website or apply link provided.';
+    result.details.push('Not provided — treated as neutral, no penalty.');
+    return result;
+  }
+
+  let worst = 0; // most negative earned
+  let officialFound = false;
+
+  for (const h of urlHosts) {
+    if (isShortener(h.hostname)) {
+      worst = Math.min(worst, -20);
+      result.details.push(`URL "${h.hostname}" is a link shortener — scammers use these to hide the real destination.`);
+    } else if (hasSuspiciousTLD(h.hostname)) {
+      worst = Math.min(worst, -15);
+      result.details.push(`URL "${h.hostname}" uses a suspicious top-level domain (".${h.tld}") commonly abused by scammers.`);
+    } else if (isFreeHosting(h.hostname)) {
+      worst = Math.min(worst, -8);
+      result.details.push(`URL "${h.hostname}" is hosted on a free platform; legitimate employers use custom domains.`);
+    } else if (isOfficialMatch(h.hostname, company)) {
+      officialFound = true;
+      result.details.push(`URL "${h.hostname}" is an official domain for the claimed company.`);
+    } else if (!h.isHttps) {
+      worst = Math.min(worst, -6);
+      result.details.push(`URL "${h.hostname}" does not use HTTPS encryption.`);
+    } else {
+      result.details.push(`URL "${h.hostname}" is a normal custom domain (neutral signal by itself).`);
+    }
+    if (!h.isHttps && worst > -6 && !isShortener(h.hostname) && !hasSuspiciousTLD(h.hostname)) {
+      worst = Math.min(worst, -6);
+    }
+  }
+
+  if (officialFound) {
+    result.earned = 20;
+    result.status = 'positive';
+    result.summary = 'The job links to an official company domain.';
+  } else if (worst < 0) {
+    result.earned = worst;
+    result.status = worst <= -15 ? 'danger' : 'warning';
+    result.summary = worst <= -15 ? 'The job source looks fraudulent.' : 'The job source raises concerns.';
+  } else {
+    result.earned = 0;
+    result.status = 'neutral';
+    result.summary = 'The provided URLs are not clearly fraudulent.';
+  }
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Recruiter email (weight 10)                                                */
+/* -------------------------------------------------------------------------- */
+
+const analyzeEmail = (recruiterEmail, company) => {
+  const email = clean(recruiterEmail);
+  const result = {
+    key: 'email',
+    label: 'Recruiter Email',
+    weight: 10,
+    earned: 0,
+    status: 'neutral',
+    summary: '',
+    details: []
+  };
+
+  if (!email) {
+    result.summary = 'No recruiter email provided.';
+    result.details.push('Not provided — treated as neutral, no penalty.');
+    return result;
+  }
+
+  const parts = email.split('@');
+  if (parts.length !== 2 || !parts[1].includes('.')) {
+    result.earned = -6;
+    result.status = 'warning';
+    result.summary = 'The recruiter email address looks invalid.';
+    result.details.push(`"${recruiterEmail}" is not a well-formed email address.`);
+    return result;
+  }
+
+  const domain = parts[1].toLowerCase();
+
+  if (isOfficialMatch(domain, company)) {
+    result.earned = 10;
+    result.status = 'positive';
+    result.summary = `Recruiter email uses the company's official domain (@${domain}).`;
+    result.details.push(`Email suffix "@${domain}" matches an official domain of the claimed company.`);
+    return result;
+  }
+
+  if (DISPOSABLE_DOMAINS.some((d) => domain.includes(d))) {
+    result.earned = -10;
+    result.status = 'danger';
+    result.summary = `Recruiter email uses a disposable/temporary mail provider (@${domain}).`;
+    result.details.push('Disposable email addresses are common in scams because they are anonymous and short-lived.');
+    return result;
+  }
+
+  if (FREE_EMAIL_DOMAINS.has(domain)) {
+    result.earned = -7;
+    result.status = 'warning';
+    result.summary = `Recruiter uses a free personal email (@${domain}) instead of a corporate domain.`;
+    result.details.push('A free email alone does not prove a scam, but legitimate employers normally recruit from official corporate addresses.');
+    return result;
+  }
+
+  if (email.includes('+')) {
+    result.earned = Math.min(result.earned, -2);
+    result.details.push('Email uses "+" addressing, unusual for corporate recruiters.');
+  }
+
+  if (result.earned === 0) {
+    result.earned = 3;
+    result.status = 'positive';
+    result.summary = `Recruiter email uses a non-free custom domain (@${domain}).`;
+    result.details.push('A private/corporate-style email domain is a mild positive signal.');
+  }
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Salary analysis (weight 10)                                                */
+/* -------------------------------------------------------------------------- */
+
+const analyzeSalary = (salary, company, jobDescription) => {
+  const value = toText(salary).trim();
+  const result = {
+    key: 'salary',
+    label: 'Salary Analysis',
+    weight: 10,
+    earned: 0,
+    status: 'neutral',
+    summary: '',
+    details: []
+  };
+
+  if (!value) {
+    result.summary = 'No salary information provided.';
+    result.details.push('Not provided — treated as neutral, no penalty.');
+    return result;
+  }
+
+  const lower = value.toLowerCase();
+  const vagueBoilerplate = ['unlimited', 'no bar', 'no limit', 'no salary limit', 'best in industry', 'highest in market', 'not a constraint'];
+  const vagueHit = vagueBoilerplate.find((w) => lower.includes(w));
+
+  if (vagueHit) {
+    result.earned = -6;
+    result.status = 'warning';
+    result.summary = `Salary is vague ("${vagueHit}") instead of a concrete range.`;
+    result.details.push('Legitimate employers normally publish a clear salary range.');
+    return result;
+  }
+
+  // Parse "X crore / X lakh" style values (Indian market)
+  let annualEstimate = null;
+  let how = '';
+  const crore = lower.match(/(\d+(?:\.\d+)?)\s*(?:crore|crores|cr)\b/i);
+  const lakh = lower.match(/(\d+(?:\.\d+)?)\s*(?:lakh|lac|lacs|lakhs|lpa)\b/i);
+  const perMonth = /\bper\s*month\b|\/month\b|\bmonthly\b/i.test(lower);
+
+  if (crore) {
+    annualEstimate = parseFloat(crore[1]) * 1e7;
+    how = 'crore';
+  } else if (lakh) {
+    const lakhValue = parseFloat(lakh[1]) * 1e5;
+    annualEstimate = perMonth ? lakhValue * 12 : lakhValue;
+    how = perMonth ? 'lakh per month' : 'lakh per annum';
+  }
+
+  const descLower = toText(jobDescription).toLowerCase();
+  const easyWorkClaim = /no\s+experience|no\s+skills|no\s+qualification|fresher|data\s+entry|1\s*[- ]?hour|easy\s+work|anyone\s+can/i.test(descLower);
+
+  if (annualEstimate !== null) {
+    if (annualEstimate >= 2e7) {
+      result.earned = -8;
+      result.status = 'danger';
+      result.summary = `Salary of ${value} (≈₹${annualEstimate.toLocaleString('en-IN')}/year) is extraordinarily high.`;
+      result.details.push('Extreme salary promises with minimal effort are a hallmark of scam postings. Verify independently.');
+    } else if (annualEstimate >= 5e6 && easyWorkClaim) {
+      result.earned = -8;
+      result.status = 'danger';
+      result.summary = `Salary of ${value} is unrealistic for a role that requires no experience or minimal work.`;
+      result.details.push('High pay for low-skill/fresher roles is a classic scam lure.');
+    } else if (annualEstimate >= 5e6) {
+      result.earned = -3;
+      result.status = 'warning';
+      result.summary = `Salary of ${value} is high but plausible only for senior/experienced roles.`;
+      result.details.push('Confirm the role seniority matches the stated pay before proceeding.');
+    } else {
+      result.earned = 6;
+      result.status = 'positive';
+      result.summary = `Salary of ${value} (≈₹${annualEstimate.toLocaleString('en-IN')}/year) appears reasonable.`;
+      result.details.push('A concrete, realistic salary range is a positive signal.');
+    }
+    return result;
+  }
+
+  const hasNumber = /\d/.test(value);
+  if (hasNumber) {
+    result.earned = 4;
+    result.status = 'positive';
+    result.summary = 'Salary includes a specific figure.';
+    result.details.push('A specific number is provided, which is more trustworthy than vague wording.');
+  } else {
+    result.earned = 0;
+    result.status = 'neutral';
+    result.summary = 'Salary is described but without a clear figure.';
+    result.details.push('No concrete range given — neutral, but verify the offer independently.');
+  }
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Job description quality (weight 10)                                        */
+/* -------------------------------------------------------------------------- */
+
+const analyzeJobDescription = (jobDescription) => {
+  const text = toText(jobDescription);
+  const result = {
+    key: 'jobDescription',
+    label: 'Job Description',
+    weight: 10,
+    earned: 0,
+    status: 'neutral',
+    summary: '',
+    details: []
+  };
+
+  if (!text.trim()) {
+    result.summary = 'No job description provided.';
+    result.details.push('Not provided — treated as neutral, no penalty.');
+    return result;
+  }
+
+  const len = text.length;
+  const professionalMarkers = ['responsibilities', 'qualifications', 'requirements', 'about the role', 'key skills', 'what we offer', 'role description', 'skills required'];
+  const markers = professionalMarkers.filter((m) => text.toLowerCase().includes(m));
+
+  if (len < 80) {
+    result.earned = -5;
+    result.status = 'warning';
+    result.summary = `Job description is very short (${len} characters).`;
+    result.details.push('Legitimate postings normally include responsibilities and requirements in detail.');
+  } else {
+    result.earned = markers.length >= 2 ? 6 : 3;
+    result.status = 'positive';
+    result.summary = markers.length >= 2
+      ? `Job description is detailed and professionally structured (${len} characters).`
+      : `Job description is reasonably detailed (${len} characters).`;
+    result.details.push('A substantive posting with clear sections is a positive signal.');
+  }
+
+  const words = text.split(/\s+/);
+  const capsWords = words.filter((w) => w.length > 2 && w === w.toUpperCase() && /[A-Z]/.test(w)).length;
+  if (words.length > 0 && capsWords / words.length > 0.3) {
+    result.earned = Math.max(result.earned - 3, -8);
+    result.details.push('Heavy use of ALL CAPS (unprofessional and typical of spam postings).');
+  }
+  const exclamations = (text.match(/!/g) || []).length;
+  if (exclamations > 4) {
+    result.earned = Math.max(result.earned - 2, -8);
+    result.details.push(`Excessive exclamation marks (${exclamations} found).`);
+  }
+
+  if (result.status === 'positive' && result.earned < 0) result.status = 'warning';
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Application safety (weight 10) — fees & sensitive credentials             */
+/* -------------------------------------------------------------------------- */
+
+const FEE_KEYWORDS = [
+  'registration fee', 'processing fee', 'training fee', 'security deposit',
+  'joining fee', 'application fee', 'advance payment', 'advance fee', 'refundable deposit',
+  'activation fee', 'setup fee', 'membership fee', 'verification fee', 'booking fee',
+  'certification fee', 'stamping fee', 'clearance fee', 'documentation fee',
+  'background check fee', 'caution money', 'earnest money', 'pay to apply',
+  'pay upfront', 'money upfront', 'payment required', 'deposit fee', 'cash bond',
+  'pay to', 'payment before', 'pay before', 'call this number to register'
+];
+
+const CREDENTIAL_KEYWORDS = [
+  'otp', 'upi pin', 'upi id', 'gpay', 'phonepe', 'paytm', 'bank pin', 'atm pin',
+  'card number', 'cvv', 'netbanking', 'internet banking password', 'online banking detail',
+  'gift card', 'google play card', 'itunes card', 'aadhaar', 'pan card', 'pan details',
+  'passport copy', 'passport details', 'bank account number before joining',
+  'bank details before', 'send your pan', 'send otp'
+];
+
+const EQUIPMENT_KEYWORDS = [
+  'laptop fee', 'laptop deposit', 'uniform fee', 'equipment purchase', 'buy your own equipment',
+  'hardware fee', 'software purchase', 'license fee'
+];
+
+const analyzeApplicationSafety = (jobDescription, applyLink) => {
+  const text = clean(jobDescription);
+  const result = {
+    key: 'applicationSafety',
+    label: 'Application Safety',
+    weight: 10,
+    earned: 0,
+    status: 'neutral',
+    summary: '',
+    details: [],
+    hardRisk: false
+  };
+
+  if (!text) {
+    result.summary = 'No job description provided to check application safety.';
+    result.details.push('Not provided — treated as neutral, no penalty.');
+    return result;
+  }
+
+  const feeHits = FEE_KEYWORDS.filter((k) => text.includes(k));
+  const credentialHits = CREDENTIAL_KEYWORDS.filter((k) => text.includes(k));
+  const equipmentHits = EQUIPMENT_KEYWORDS.filter((k) => text.includes(k));
+
+  if (feeHits.length > 0) {
+    result.hardRisk = true;
+    result.earned = -10;
+    result.status = 'danger';
+    result.summary = `The posting asks applicants for money ("${feeHits[0]}").`;
+    result.details.push(`Detected fee/payment request: ${feeHits.join(', ')}.`);
+    result.details.push('Legitimate employers NEVER ask candidates to pay for applications, registration, training, or jobs.');
+    return result;
+  }
+
+  if (credentialHits.length > 0) {
+    result.hardRisk = true;
+    result.earned = -10;
+    result.status = 'danger';
+    result.summary = `The posting requests sensitive credentials ("${credentialHits[0]}").`;
+    result.details.push(`Detected sensitive-data request: ${credentialHits.join(', ')}.`);
+    result.details.push('Never share OTPs, UPI/bank PINs, passwords, or card details with any employer.');
+    return result;
+  }
+
+  if (equipmentHits.length > 0) {
+    result.hardRisk = true;
+    result.earned = -10;
+    result.status = 'danger';
+    result.summary = `The posting asks candidates to buy equipment ("${equipmentHits[0]}").`;
+    result.details.push('Scammers make victims pay for "mandatory" equipment before disappearing.');
+    return result;
+  }
+
+  const sensitivePersonal = /passport|aadhaar|pan\b|bank details|bank account|id card copy/i.test(jobDescription || '');
+  if (sensitivePersonal) {
+    result.earned = -5;
+    result.status = 'warning';
+    result.summary = 'The posting requests sensitive personal/ID documents during application.';
+    result.details.push('Only share identity documents during legitimate post-offer onboarding, never before an interview.');
+    return result;
+  }
+
+  const applyHost = parseHostname(applyLink);
+  if (applyHost && isShortener(applyHost.hostname)) {
+    result.earned = -6;
+    result.status = 'warning';
+    result.summary = 'The apply button links to a URL shortener.';
+    result.details.push('Scammers hide real destinations behind short links.');
+    return result;
+  }
+
+  result.earned = 6;
+  result.status = 'positive';
+  result.summary = 'No payment or sensitive-data requests detected.';
+  result.details.push('The posting does not ask for money, OTPs, or bank/card details — standard for legitimate employers.');
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Phone / contact (weight 5)                                                 */
+/* -------------------------------------------------------------------------- */
+
+const analyzePhone = (phoneNumber) => {
+  const raw = toText(phoneNumber).trim();
+  const result = {
+    key: 'phone',
+    label: 'Phone / Contact',
+    weight: 5,
+    earned: 0,
+    status: 'neutral',
+    summary: '',
+    details: []
+  };
+
+  if (!raw) {
+    result.summary = 'No phone number provided.';
+    result.details.push('Not provided — treated as neutral, no penalty.');
+    return result;
+  }
+
+  const digits = raw.replace(/[^\d]/g, '');
+  if (digits.length < 7 || digits.length > 15) {
+    result.earned = -5;
+    result.status = 'danger';
+    result.summary = 'The phone number looks invalid.';
+    result.details.push(`"${raw}" does not look like a valid international phone number.`);
+    return result;
+  }
+
+  const repeated = /(\d)\1{5,}/.test(digits) || /123456|654321|111111|222222|333333|444444|555555|666666|777777|888888|999999/.test(digits);
+  if (repeated) {
+    result.earned = -5;
+    result.status = 'danger';
+    result.summary = 'The phone number uses a repeated/fake pattern.';
+    result.details.push(`"${raw}" looks like a placeholder or fabricated number.`);
+    return result;
+  }
+
+  const nonDigitChars = raw.replace(/[\d\s+\-()]/g, '');
+  if (nonDigitChars.length > 0) {
+    result.earned = -2;
+    result.status = 'warning';
+    result.details.push('The phone number contains unusual characters.');
+    return result;
+  }
+
+  result.earned = 3;
+  result.status = 'positive';
+  result.summary = 'A valid-looking contact number is provided.';
+  result.details.push('A real contact number is a mild positive signal.');
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Scam language (weight 5)                                                   */
+/* -------------------------------------------------------------------------- */
+
+const analyzeScamLanguage = (jobTitle, jobDescription, salary) => {
+  const text = clean([jobTitle, jobDescription, salary].join(' '));
+  const result = {
+    key: 'scamLanguage',
+    label: 'Scam Language',
+    weight: 5,
+    earned: 0,
+    status: 'neutral',
+    summary: '',
+    details: [],
+    keywordsFound: []
+  };
+
+  if (!text) {
+    result.summary = 'No text to analyze.';
+    return result;
+  }
+
+  const found = [];
   for (const entry of scamKeywords) {
     if (entry.isActive !== undefined && !entry.isActive) continue;
     const pattern = entry.keyword.toLowerCase();
-    let matched = false;
     if (/[\s-]/.test(pattern)) {
-      matched = text.includes(pattern);
+      if (text.includes(pattern)) found.push(entry);
     } else {
-      matched = new RegExp(`\\b${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
-    }
-    if (matched) {
-      foundKeywords.push(entry);
+      const re = new RegExp(`\\b${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (re.test(text)) found.push(entry);
     }
   }
 
-  const strong = foundKeywords.filter(k => (k.points || 0) >= 30);
-  const medium = foundKeywords.filter(k => (k.points || 0) >= 15 && (k.points || 0) < 30);
-  const soft = foundKeywords.filter(k => (k.points || 0) < 15);
-
-  let score = 0;
-  if (strong.length > 0) {
-    score = 90;
-  } else if (medium.length >= 3) {
-    score = 65;
-  } else if (medium.length === 2) {
-    score = 40;
-  } else if (medium.length === 1) {
-    score = 15;
-  } else if (soft.length >= 6) {
-    score = 15;
-  } else if (soft.length >= 4) {
-    score = 10;
+  result.keywordsFound = found;
+  if (found.length === 0) {
+    result.summary = 'No scam-related language detected.';
+    result.details.push('No scam keywords found in the posting.');
+    return result;
   }
 
-  const moneyKeywords = foundKeywords.filter(k => k.category === 'money').length;
-  const investmentKeywords = foundKeywords.filter(k => k.category === 'investment').length;
-  const fakeBenefits = foundKeywords.filter(k => k.category === 'fake_benefits').length;
+  const dangerous = found.filter((k) => k.category === 'money' || k.category === 'investment');
+  const strong = found.filter((k) => (k.points || 0) >= 25 && !dangerous.includes(k));
+  const medium = found.filter((k) => (k.points || 0) >= 12 && !dangerous.includes(k) && !strong.includes(k));
 
-  let details = '';
-  if (foundKeywords.length === 0) {
-    details = 'No scam-related keywords detected in the job posting.';
+  const names = (arr) => arr.slice(0, 6).map((k) => k.keyword).join(', ');
+  if (dangerous.length > 0) {
+    result.earned = -5;
+    result.status = 'danger';
+    result.summary = 'Money/investment scam language detected.';
+    result.details.push(`Found: ${names(dangerous)}.`);
+    result.details.push(dangerous.some((k) => k.category === 'money')
+      ? 'Asking candidates for fees/deposits is the strongest scam signal.'
+      : 'Investment/pyramid language indicates a potential MLM or Ponzi scheme.');
+  } else if (strong.length > 0) {
+    result.earned = -4;
+    result.status = 'warning';
+    result.summary = 'High-confidence scam phrases detected.';
+    result.details.push(`Found: ${names(strong)}.`);
+  } else if (medium.length >= 2) {
+    result.earned = -3;
+    result.status = 'warning';
+    result.summary = 'Several scam-pattern phrases detected.';
+    result.details.push(`Found: ${names(medium)}.`);
+  } else if (found.length >= 3) {
+    result.earned = -2;
+    result.status = 'warning';
+    result.summary = 'Minor scam-pattern phrases detected.';
+    result.details.push(`Found: ${names(found)}.`);
+  }
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Urgency pressure (weight 5)                                                */
+/* -------------------------------------------------------------------------- */
+
+const URGENCY_PATTERNS = [
+  /\bact\s*now\b/gi, /\bhurr+y\b/gi, /\bimmediate\s+(start|joining|hire)/gi,
+  /\burgen?t(ly)?\b/gi, /\blimited\s+(positions?|seats?|slots?|time|offer)/gi,
+  /\blast\s+chance\b/gi, /\bdon'?t\s+(miss|delay|wait)\b/gi, /\bapply\s+(today|now|immediately)/gi,
+  /\bfew\s+(days?|hours?|seats?|slots?)\s+(left|remain)/gi, /\bonly\s+\d+\s+(days?|hours?|seats?)/gi,
+  /\bfirst\s+(come|serve|basis)/gi, /\bopportunity\s+of\s+a\s+lifetime\b/gi,
+  /\bonce\s+in\s+a\s+lifetime\b/gi, /\bquick\s+hire\b/gi, /\binstant\s+(selection|joining|approval)/gi
+];
+
+const analyzeUrgency = (jobDescription) => {
+  const text = toText(jobDescription);
+  const result = {
+    key: 'urgency',
+    label: 'Urgency / Pressure',
+    weight: 5,
+    earned: 0,
+    status: 'neutral',
+    summary: '',
+    details: []
+  };
+  if (!text.trim()) {
+    result.summary = 'No text to analyze.';
+    return result;
+  }
+  const hits = [];
+  for (const p of URGENCY_PATTERNS) {
+    const m = text.match(p);
+    if (m) hits.push(...m);
+  }
+  if (hits.length === 0) {
+    result.earned = 2;
+    result.status = 'positive';
+    result.summary = 'No urgency pressure tactics detected.';
+    result.details.push('The posting does not pressure applicants to act immediately.');
+  } else if (hits.length >= 6) {
+    result.earned = -5;
+    result.status = 'danger';
+    result.summary = 'Intense urgency pressure detected.';
+    result.details.push(`Found ${hits.length} urgency cues (${hits.slice(0, 5).join(', ')}).`);
+  } else if (hits.length >= 3) {
+    result.earned = -4;
+    result.status = 'warning';
+    result.summary = 'High urgency pressure detected.';
+    result.details.push(`Found ${hits.length} urgency cues (${hits.slice(0, 5).join(', ')}).`);
   } else {
-    details = `Found ${foundKeywords.length} keyword signal${foundKeywords.length > 1 ? 's' : ''}. `;
-    if (moneyKeywords > 0) details += `${moneyKeywords} fee/ payment-related keyword${moneyKeywords > 1 ? 's' : ''} detected. `;
-    if (investmentKeywords > 0) details += `${investmentKeywords} investment-related keyword${investmentKeywords > 1 ? 's' : ''} detected. `;
-    if (fakeBenefits > 0) details += `${fakeBenefits} benefit claim${fakeBenefits > 1 ? 's' : ''} detected. `;
-    const strongKeywords = foundKeywords.filter(k => (k.points || 0) >= 15).map(k => k.keyword);
-    if (strongKeywords.length > 0) details += `Notable signals: ${strongKeywords.join(', ')}.`;
+    result.earned = -2;
+    result.status = 'warning';
+    result.summary = 'Some urgency language detected.';
+    result.details.push(`Found: ${hits.join(', ')}.`);
+  }
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Optional DB cross-check (non-blocking, deterministic when DB is down)      */
+/* -------------------------------------------------------------------------- */
+
+async function dbCompanyNote(company, verification) {
+  try {
+    const mongoose = require('mongoose');
+    if (!mongoose || mongoose.connection.readyState !== 1) return;
+    const doc = await Company.findOne({
+      name: { $regex: new RegExp(company.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').split(' ')[0], 'i') }
+    });
+    if (doc && doc.verified) {
+      verification.notes.push(`Cross-checked "${company.name}" against the JobShield company database (${doc.domain || doc.website || 'verified'}).`);
+    }
+  } catch {
+    // DB offline — cross-check is optional, do not fail the scan
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Risk level & explanation                                                   */
+/* -------------------------------------------------------------------------- */
+
+const getRiskLevel = (trustScore) => {
+  const t = clamp(trustScore, 0, 100);
+  if (t >= 90) return 'Highly Trusted';
+  if (t >= 75) return 'Low Risk';
+  if (t >= 50) return 'Moderate Risk';
+  if (t >= 25) return 'High Risk';
+  return 'Critical Risk';
+};
+
+const getVerdict = (trustScore) => getRiskLevel(trustScore);
+
+const generateExplanation = (data) => {
+  const { verification, breakdown, hardRisk, companyName, riskLevel, trustScore } = data;
+  const parts = [];
+
+  const v = verification;
+  if (v.identityMatched && v.domainMatched) {
+    parts.push(`Company identity verified: "${v.claimedCompany}" is a recognized employer and the posting links to its official domain (${v.providedHostname || 'official'}).`);
+  } else if (v.identityMatched && v.typosquatDetected) {
+    parts.push(`WARNING — the company name "${v.claimedCompany}" is real, but a provided URL appears to impersonate the official domain "${v.typosquatOf}". This is a typosquatting pattern.`);
+  } else if (v.identityMatched) {
+    parts.push(`The company name "${v.claimedCompany}" matches a recognized employer, but the posting could not be linked to an official domain.`);
+  } else {
+    parts.push(`Company "${companyName || 'provided'}" was not found in JobShield's verified company registry.`);
+  }
+  if (v.notes.length && !v.domainMatched) {
+    parts.push('Official source could not be independently verified.');
+  }
+
+  const danger = breakdown.filter((b) => b.status === 'danger');
+  const warning = breakdown.filter((b) => b.status === 'warning');
+  const positive = breakdown.filter((b) => b.status === 'positive');
+
+  if (danger.length > 0) {
+    parts.push('Strong risk indicators: ' + danger.map((b) => b.summary).join(' '));
+  }
+  if (warning.length > 0) {
+    parts.push('Caution indicators: ' + warning.map((b) => b.summary).join(' '));
+  }
+  if (positive.length > 0) {
+    parts.push('Positive signals (evidence-based only): ' + positive.map((b) => b.label).join(', ') + '.');
+  }
+
+  if (hardRisk) {
+    parts.push('This posting asks for money or sensitive credentials — legitimate employers never do this. We strongly advise against proceeding.');
+  } else if (riskLevel === 'Highly Trusted' || riskLevel === 'Low Risk') {
+    parts.push('You may proceed with reasonable confidence, though normal caution is always advised.');
+  } else if (riskLevel === 'Moderate Risk') {
+    parts.push('Proceed with caution: verify the company on its official website before sharing any details, and never pay any employer.');
+  } else if (riskLevel === 'High Risk') {
+    parts.push('High caution advised: independently verify this employer, do not share sensitive data, and do not pay anything.');
+  } else {
+    parts.push('This posting shows critical fraud indicators. Do not proceed and consider reporting it.');
+  }
+
+  return parts.join(' ');
+};
+
+/* -------------------------------------------------------------------------- */
+/* Main entry                                                                 */
+/* -------------------------------------------------------------------------- */
+
+const calculateRiskScore = (allResults) => {
+  const total = allResults.reduce((sum, r) => sum + (r.earned || 0), 0);
+  return 100 - clamp(50 + total, 0, 100);
+};
+
+const buildBreakdown = (factors) => factors.map((f) => ({
+  key: f.key,
+  label: f.label,
+  weight: f.weight,
+  earned: f.earned,
+  status: f.status,
+  summary: f.summary,
+  details: f.details,
+  riskScore: mapStatusToRiskScore(f.status)
+}));
+
+const analyzeJobPosting = async (data = {}) => {
+  const {
+    jobTitle = '',
+    companyName = '',
+    jobDescription = '',
+    salary = '',
+    recruiterEmail = '',
+    phoneNumber = '',
+    website = '',
+    applyLink = ''
+  } = data;
+
+  const company = lookupCompany(companyName);
+
+  const companyResult = analyzeCompanyVerification(companyName, website, applyLink);
+  await dbCompanyNote(company, companyResult.verification);
+
+  const sourceResult = analyzeJobSource(website, applyLink, company);
+  const emailResult = analyzeEmail(recruiterEmail, company);
+  const salaryResult = analyzeSalary(salary, company, jobDescription);
+  const descResult = analyzeJobDescription(jobDescription);
+  const safetyResult = analyzeApplicationSafety(jobDescription, applyLink);
+  const phoneResult = analyzePhone(phoneNumber);
+  const langResult = analyzeScamLanguage(jobTitle, jobDescription, salary);
+  const urgencyResult = analyzeUrgency(jobDescription);
+
+  const factors = [
+    companyResult,
+    sourceResult,
+    emailResult,
+    salaryResult,
+    descResult,
+    safetyResult,
+    phoneResult,
+    langResult,
+    urgencyResult
+  ];
+
+  const hardRisk = factors.some((f) => f.hardRisk === true);
+
+  let trustScore = Math.round(clamp(50 + factors.reduce((s, f) => s + f.earned, 0), 0, 100));
+  if (hardRisk) trustScore = Math.min(trustScore, 20);
+
+  const riskScore = 100 - trustScore;
+  const riskLevel = getRiskLevel(trustScore);
+
+  const verification = companyResult.verification;
+
+  const evidence = [];
+  const warnings = [];
+
+  for (const f of factors) {
+    for (const msg of f.details || []) {
+      evidence.push({ factor: f.label, type: f.status, message: msg });
+    }
+    if (f.status === 'danger' || f.status === 'warning') {
+      warnings.push(`${f.label}: ${f.summary}`);
+    }
+  }
+
+  const keywordsFound = langResult.keywordsFound.map((k) => ({
+    keyword: k.keyword,
+    category: k.category,
+    severity: k.severity,
+    points: k.points
+  }));
+
+  const breakdown = buildBreakdown(factors);
+
+  const aiExplanation = generateExplanation({
+    verification,
+    breakdown,
+    hardRisk,
+    companyName: toText(companyName),
+    riskLevel,
+    trustScore
+  });
+
+  const details = {};
+  for (const f of factors) {
+    details[f.key] = {
+      score: mapStatusToRiskScore(f.status),
+      status: f.status,
+      summary: f.summary,
+      details: f.details
+    };
   }
 
   return {
-    score,
-    keywordsFound: foundKeywords.map(k => k.keyword),
+    trustScore,
+    riskScore,
+    riskLevel,
+    verdict: getVerdict(trustScore),
+    aiExplanation,
+    verification,
+    evidence,
+    warnings,
+    breakdown,
+    keywordsFound,
+    hardRisk,
     details
   };
 };
 
-const analyzeSalary = (salary) => {
-  let score = 0;
-  let details = '';
-  if (!salary || salary.trim() === '') {
-    return { score: 0, details: 'No salary information provided.' };
-  }
-
-  const salaryLower = salary.toLowerCase();
-
-  const suspiciousPatterns = [
-    'no bar', 'unlimited', 'no limit', 'not a constraint',
-    'best in industry', 'highest in market', 'no salary limit'
-  ];
-  for (const pattern of suspiciousPatterns) {
-    if (salaryLower.includes(pattern)) {
-      score = Math.max(score, 40);
-      details = `Suspicious salary pattern detected: "${pattern}". Legitimate employers typically specify salary ranges.`;
-      break;
-    }
-  }
-
-  const highValuePatterns = [
-    { regex: /(\d+)\s*(crore|crores|cr)\s*(per\s*)?(year|annum|yr|month)?/i, threshold: 1, pts: 50 },
-    { regex: /(\d+)\s*(lakh|lacs|lakhs)\s*per\s*month/i, threshold: 1, pts: 60 },
-    { regex: /(\d+)\s*(lakh|lacs|lakhs)\s*(per\s*)?(year|annum|yr)?/i, threshold: 20, pts: 30 },
-    { regex: /(\d+[kK])\s*(per\s*)?(month)?/i, threshold: 500, pts: 35 },
-    { regex: /(\d+)\s*-\s*(\d+)\s*(lakh|lacs|lakhs)/i, threshold: 50, pts: 40 }
-  ];
-
-  for (const { regex, threshold, pts } of highValuePatterns) {
-    const match = salaryLower.match(regex);
-    if (match) {
-      const value = parseFloat(match[1]);
-      if (value >= threshold) {
-        score = Math.max(score, pts);
-        if (!details) {
-          details = `Unrealistically high salary detected: "${salary}". This is a common scam tactic to attract applicants. Legitimate companies offer market-competitive salaries.`;
-        }
-        break;
-      }
-    }
-  }
-
-  if (score === 0) {
-    const hasNumbers = /\d/.test(salary);
-    if (hasNumbers) {
-      score = 5;
-      details = 'Salary information provided appears reasonable.';
-    } else {
-      details = 'Salary information is vague.';
-    }
-  }
-
-  return { score, details };
-};
-
-const analyzeEmail = (recruiterEmail) => {
-  let score = 0;
-  let details = '';
-
-  if (!recruiterEmail || recruiterEmail.trim() === '') {
-    return { score: 0, details: 'No recruiter email provided.' };
-  }
-
-  const email = recruiterEmail.toLowerCase().trim();
-
-  const freeEmailProviders = [
-    'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com',
-    'live.com', 'aol.com', 'mail.com', 'protonmail.com',
-    'yandex.com', 'zoho.com', 'rediffmail.com', 'msn.com',
-    'icloud.com', 'gmx.com', 'inbox.com', 'fastmail.com'
-  ];
-
-  const domain = email.split('@')[1];
-  if (!domain) {
-    return { score: 30, details: 'Invalid email format.' };
-  }
-
-  if (freeEmailProviders.includes(domain)) {
-    score = 25;
-    details = `Recruiter is using a free email provider (${domain}). Legitimate companies typically use corporate email addresses (e.g., name@company.com). `;
-  }
-
-  const suspiciousDomains = ['temp', 'tempmail', 'disposable', 'throwaway', 'guerrilla', 'mailinator'];
-  for (const susDomain of suspiciousDomains) {
-    if (domain.includes(susDomain)) {
-      score = Math.max(score, 70);
-      details = `Disposable/temporary email domain detected: ${domain}. This is highly suspicious as legitimate recruiters use permanent email addresses.`;
-      break;
-    }
-  }
-
-  if (email.includes('+')) {
-    score = Math.max(score, 20);
-    details += 'Email contains plus addressing which is unusual for corporate communications.';
-  }
-
-  const namePatterns = email.split('@')[0];
-  const suspiciousNames = ['hr', 'recruiter', 'admin', 'info', 'contact', 'support', 'careers', 'job', 'hello'];
-  for (const sn of suspiciousNames) {
-    if (namePatterns === sn || namePatterns.startsWith(sn) || namePatterns.includes(sn)) {
-      score = Math.max(score, 15);
-      if (!details.includes('generic')) {
-        details += 'Generic email prefix used (hr@, info@, etc.) which is often used by scammers.';
-      }
-      break;
-    }
-  }
-
-  if (score === 0) {
-    score = 5;
-    details = 'Email appears to be a legitimate corporate email address.';
-  }
-
-  return { score, details };
-};
-
-const analyzeURL = (website, applyLink) => {
-  let score = 0;
-  const details = [];
-  const urls = [website, applyLink].filter(Boolean);
-
-  if (urls.length === 0) {
-    return { score: 0, details: 'No URLs provided.' };
-  }
-
-  const shorteners = [
-    'tinyurl.com', 'bit.ly', 'goo.gl', 'ow.ly', 'shorturl',
-    'tiny.cc', 'bit.do', 'rb.gy', 'shorturl.at', 'cutt.ly',
-    'is.gd', 'buff.ly', 'rebrand.ly', 't.co', 'lnkd.in'
-  ];
-
-  for (const url of urls) {
-    const urlLower = url.toLowerCase();
-
-    for (const shortener of shorteners) {
-      if (urlLower.includes(shortener)) {
-        score = Math.max(score, 40);
-        details.push(`URL shortener detected: "${shortener}". Scammers often use shortened URLs to hide malicious destinations.`);
-        break;
-      }
-    }
-
-    if (!urlLower.startsWith('https://') && urlLower.startsWith('http://')) {
-      score = Math.max(score, 20);
-      details.push('URL does not use HTTPS encryption. Legitimate company websites always use HTTPS.');
-    }
-
-    if (!urlLower.startsWith('http://') && !urlLower.startsWith('https://')) {
-      score = Math.max(score, 15);
-      details.push('URL is missing protocol (http/https). This is unusual for legitimate companies.');
-    }
-
-    const suspiciousTLDs = ['.xyz', '.top', '.club', '.online', '.site', '.work', '.click', '.link', '.download', '.review'];
-    for (const tld of suspiciousTLDs) {
-      if (urlLower.includes(tld)) {
-        score = Math.max(score, 25);
-        details.push(`Suspicious top-level domain detected: "${tld}". Scammers often use cheap TLDs.`);
-        break;
-      }
-    }
-
-    const suspiciousPatterns = ['free', 'money', 'earn', 'win', 'prize', 'cash', 'bonus', 'salary', 'job', 'career', 'apply'];
-    for (const sp of suspiciousPatterns) {
-      if (new RegExp(`(^|\\.)${sp}\\.`).test(urlLower) || new RegExp(`/${sp}`).test(urlLower)) {
-        score = Math.max(score, 15);
-        details.push(`URL contains suspicious keyword: "${sp}".`);
-        break;
-      }
-    }
-  }
-
-  if (score === 0) {
-    score = 5;
-    details.push('URLs appear legitimate.');
-  }
-
-  return { score, details: details.join(' ') };
-};
-
-const analyzePhone = (phoneNumber) => {
-  let score = 0;
-  let details = '';
-
-  if (!phoneNumber || phoneNumber.trim() === '') {
-    return { score: 0, details: 'No phone number provided.' };
-  }
-
-  const phone = phoneNumber.replace(/[\s\-\(\)\+]/g, '');
-
-  if (phone.length < 7 || phone.length > 15) {
-    score = 30;
-    details = `Phone number appears invalid (${phoneNumber}). Legitimate recruiters provide valid contact numbers.`;
-    return { score, details };
-  }
-
-  if (!/^\d+$/.test(phone)) {
-    score = 20;
-    details = 'Phone number contains non-numeric characters, which is suspicious.';
-    return { score, details };
-  }
-
-  const repeatedPatterns = [
-    /(\d)\1{5,}/, /123456/, /654321/, /000000/, /111111/,
-    /222222/, /333333/, /444444/, /555555/, /666666/,
-    /777777/, /888888/, /999999/
-  ];
-  for (const pattern of repeatedPatterns) {
-    if (pattern.test(phone)) {
-      score = Math.max(score, 40);
-      details = `Suspicious phone number pattern detected: "${phoneNumber}". Scammers often use fake or repeated-digit numbers.`;
-      break;
-    }
-  }
-
-  const highRiskCountries = ['+92', '+234', '+880', '+63', '+91'];
-  for (const code of highRiskCountries) {
-    if (phoneNumber.replace(/\s/g, '').startsWith(code)) {
-      score = Math.max(score, 10);
-      details = `Phone number from country code ${code}. Exercise caution if not expecting international contact.`;
-      break;
-    }
-  }
-
-  if (score === 0) {
-    score = 5;
-    details = 'Phone number appears valid.';
-  }
-
-  return { score, details };
-};
-
-const analyzeCompanyInfo = async (companyName, location) => {
-  let score = 0;
-  let details = '';
-
-  if (!companyName || companyName.trim() === '') {
-    return { score: 10, details: 'No company name provided for verification.' };
-  }
-
-  const name = companyName.trim();
-
-  const genericNames = [
-    'company', 'corporation', 'inc', 'llc', 'ltd', 'limited',
-    'group', 'services', 'solutions', 'technologies', 'consulting',
-    'enterprises', 'ventures', 'global', 'world', 'international'
-  ];
-
-  const nameLower = name.toLowerCase();
-  let isGeneric = true;
-  let wordCount = name.split(/\s+/).length;
-
-  if (wordCount < 2) {
-    score = Math.max(score, 30);
-    details = 'Company name is too short or generic. Legitimate companies have distinctive names. ';
-  }
-
-  let genericCount = 0;
-  for (const gn of genericNames) {
-    if (nameLower === gn || nameLower.endsWith(` ${gn}`)) {
-      genericCount++;
-    }
-  }
-  if (genericCount >= 2 || (wordCount <= 2 && genericCount >= 1)) {
-    score = Math.max(score, 25);
-    details += 'Company name appears generic. Scammers often use vague company names. ';
-  }
-
-  try {
-    const companyExists = await Company.findOne({
-      name: { $regex: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }
-    });
-
-    if (companyExists) {
-      if (companyExists.verified) {
-        score = 0;
-        details = `Company "${companyExists.name}" found in our database and is verified. This is a positive sign.`;
-        if (location && companyExists.location && !companyExists.location.toLowerCase().includes(location.toLowerCase())) {
-          score = Math.max(score, 15);
-          details += ` However, the job posting location (${location}) does not match the company's known location (${companyExists.location}).`;
-        }
-      } else {
-        score = Math.max(score, 20);
-        details = `Company "${companyExists.name}" found in our database but is not yet verified. Exercise caution.`;
-      }
-    } else {
-      score = Math.max(score, 15);
-      details = `Company "${name}" was not found in our verified company database. This does not necessarily mean it's a scam, but exercise caution with unknown companies.`;
-    }
-  } catch (error) {
-    score = Math.max(score, 10);
-    details = 'Unable to verify company information due to a system error.';
-  }
-
-  return { score, details };
-};
-
-const analyzeTextQuality = (jobDescription) => {
-  let score = 0;
-  let details = [];
-
-  if (!jobDescription || jobDescription.trim() === '') {
-    return { score: 20, details: 'No job description provided. Legitimate job postings always include a description.' };
-  }
-
-  const text = jobDescription;
-
-  const capsWords = text.split(/\s+/).filter(w => w.length > 2 && w === w.toUpperCase() && /[A-Z]/.test(w)).length;
-  const totalWords = text.split(/\s+/).length;
-  if (totalWords > 0 && capsWords / totalWords > 0.3) {
-    score = Math.max(score, 30);
-    details.push('Excessive use of ALL CAPS (over 30% of text). Legitimate job postings use standard capitalization.');
-  }
-
-  const exclamationCount = (text.match(/!/g) || []).length;
-  if (exclamationCount > 3) {
-    score = Math.max(score, 20);
-    details.push(`Excessive exclamation marks (${exclamationCount} found). This is unprofessional and typical of scam postings.`);
-  }
-
-  const questionMarks = (text.match(/\?\s*\?/g) || []).length;
-  if (questionMarks > 0) {
-    score = Math.max(score, 15);
-    details.push('Multiple consecutive question marks detected, indicating unprofessional writing.');
-  }
-
-  const dollarEarnings = (text.match(/\$\d+[kK]?\s*-\s*\$\d+[kK]?/g) || []).length;
-  if (dollarEarnings > 0) {
-    score = Math.max(score, 15);
-    details.push('Salary range mentioned in dollars may indicate a scam if the job is in a non-dollar region.');
-  }
-
-  const spellingErrors = [
-    'opertunity', 'oportunity', 'oppertunity', 'guaranted', 'guarenteed',
-    'comission', 'comision', 'recieve', 'recive', 'acheive', 'acheve',
-    'succes', 'sucess', 'busness', 'bussiness', 'privledge', 'priveledge',
-    'definately', 'definitley', 'responsability', 'responsiblity',
-    'accomodate', 'accomodation', 'seperate', 'seprate', 'becuase',
-    'begining', 'begining', 'belive', 'beleive', 'calender', 'calandar',
-    'carreer', 'carear', 'catagory', 'catagory', 'commitee', 'comittee',
-    'conceed', 'concede', 'congradulate', 'congrads', 'deceit', 'deceitful',
-    'definate', 'definate', 'desparate', 'desparately', 'deteriorate',
-    'deteriate', 'embarass', 'embarassed', 'enviroment', 'environment',
-    'exagerate', 'exagerated', 'exellent', 'exelent', 'extremly',
-    'extremeley', 'finaly', 'finaly', 'flexable', 'flexiable', 'foriegn',
-    'foriegn', 'fourty', 'foward', 'freind', 'freindly', 'goverment',
-    'goverment', 'gratitude', 'gratitude', 'greatful', 'gratefull',
-    'guidence', 'guidence', 'happiness', 'happiness', 'harrass',
-    'harrassment', 'hemorrhage', 'hemorage', 'hiearchy', 'hiracy',
-    'humor', 'humour', 'imaginary', 'imagin', 'immediatly', 'immediatly',
-    'independant', 'independance', 'initiative', 'inititive', 'innoculate',
-    'inoculate', 'insistance', 'insistance', 'interupt', 'interuption',
-    'irrelevent', 'irrelevent', 'irresistable', 'irresistable', 'knowlege',
-    'knowlege', 'liason', 'liason', 'libary', 'libary', 'lisence',
-    'lisence', 'maintainance', 'maintainence', 'milage', 'millage',
-    'millenium', 'millenium', 'mischevious', 'mischievious', 'misile',
-    'missile', 'mispell', 'misspell', 'misspelled', 'misspelt',
-    'neccessary', 'necesary', 'negotiate', 'negociate', 'neutural',
-    'neutral', 'noticable', 'noticeable', 'occassion', 'occassionally',
-    'occurance', 'occurrence', 'ocurrence', 'offical', 'official',
-    'opionion', 'opinion', 'opponent', 'oponent', 'opportinity',
-    'opportunity', 'oppositt', 'oppossum', 'opthamology', 'ophthalmology',
-    'orignal', 'original', 'outragous', 'outrageous', 'paralel',
-    'parallel', 'parliment', 'parliament', 'pasttime', 'pastime',
-    'peice', 'piece', 'perseverence', 'perseverance', 'persuade',
-    'persuade', 'phenomenon', 'phenomenon', 'pitfall', 'pitfall',
-    'potatoe', 'potato', 'practically', 'practically', 'precede',
-    'preceed', 'presense', 'presence', 'prevelant', 'prevalent',
-    'priviledge', 'privelege', 'professor', 'professor', 'programing',
-    'programming', 'promise', 'promise', 'proffessor', 'professor',
-    'pronoounce', 'pronounce', 'pronounciation', 'pronunciation',
-    'propostion', 'proposition', 'pubically', 'pubically', 'publicly',
-    'publicly', 'pumkin', 'pumpkin', 'purpose', 'purpose', 'pursuade',
-    'persuade', 'puting', 'putting', 'quizes', 'quizzes', 'receed',
-    'recede', 'reccomend', 'reccommend', 'reccuring', 'recurring',
-    'rediculous', 'ridiculous', 'relevent', 'relevant', 'religous',
-    'religious', 'repetition', 'repetition', 'restaraunt', 'restaurant',
-    'restauranteur', 'restaurateur', 'rigour', 'rigor', 'sacreligious',
-    'sacrilegious', 'sandwhich', 'sandwich', 'sargent', 'sergeant',
-    'seige', 'siege', 'senseable', 'sensible', 'sentance', 'sentence',
-    'seperate', 'separate', 'sieze', 'seize', 'similiar', 'similar',
-    'sincerly', 'sincerely', 'skilful', 'skilful', 'skilfully', 'skillfully',
-    'sneek', 'sneak', 'solider', 'soldier', 'soveign', 'sovereign',
-    'speach', 'speech', 'stoped', 'stopped', 'strenght', 'strength',
-    'strenous', 'strenuous', 'stubborness', 'stubbornness', 'substancial',
-    'substantial', 'substract', 'subtract', 'succesful', 'successful',
-    'succesfully', 'successfully', 'suceed', 'succeed', 'sucess',
-    'success', 'sufficient', 'sufficient', 'supercede', 'supersede',
-    'supose', 'suppose', 'supposably', 'supposedly', 'sureity',
-    'surety', 'suround', 'surround', 'surveillance', 'surveillance',
-    'suseptable', 'susceptible', 'suspention', 'suspension', 'tatoo',
-    'tattoo', 'temperment', 'temperament', 'temporary', 'temporary',
-    'tendancy', 'tendency', 'therfore', 'therefore', 'thier', 'their',
-    'threshold', 'threshold', 'tolerence', 'tolerance', 'tommorow',
-    'tomorrow', 'tounge', 'tongue', 'truely', 'truly', 'unforetunate',
-    'unfortunate', 'untill', 'until', 'unusual', 'unusual', 'upholstry',
-    'upholstery', 'usally', 'usually', 'vacume', 'vacuum', 'vegetable',
-    'vegetable', 'vegitarian', 'vegetarian', 'vehical', 'vehicle',
-    'vigilence', 'vigilance', 'villain', 'villain', 'violence',
-    'violence', 'virual', 'virtual', 'visious', 'vicious', 'visiter',
-    'visitor', 'volcanoe', 'volcano', 'volume', 'volume', 'writting',
-    'writing'
-  ];
-
-  let foundErrors = [];
-  for (const error of spellingErrors) {
-    const regex = new RegExp(`\\b${error}\\b`, 'gi');
-    if (regex.test(text)) {
-      foundErrors.push(error);
-    }
-  }
-
-  if (foundErrors.length > 3) {
-    score = Math.max(score, 25);
-    details.push(`Multiple spelling errors detected (${foundErrors.length}). Professional job postings are proofread.`);
-  } else if (foundErrors.length > 0) {
-    score = Math.max(score, 10);
-    details.push(`Minor spelling issues detected (${foundErrors.length}).`);
-  }
-
-  const sentenceLengths = text.split(/[.!?]+/).filter(s => s.trim().length > 0).map(s => s.split(/\s+/).length);
-  if (sentenceLengths.length > 0) {
-    const avgSentenceLength = sentenceLengths.reduce((a, b) => a + b, 0) / sentenceLengths.length;
-    if (avgSentenceLength > 40) {
-      score = Math.max(score, 10);
-      details.push('Sentences are unusually long, which may indicate poorly written content.');
-    }
-  }
-
-  if (details.length === 0) {
-    details.push('Text quality appears professional with proper grammar and formatting.');
-  }
-
-  return { score, details: details.join(' ') };
-};
-
-const analyzeUrgency = (jobDescription) => {
-  let score = 0;
-  let details = '';
-
-  if (!jobDescription || jobDescription.trim() === '') {
-    return { score: 0, details: 'No job description to analyze for urgency.' };
-  }
-
-  const text = jobDescription.toLowerCase();
-
-  const urgencyPhrases = [
-    { pattern: /\burgen?t\b/gi, weight: 20 },
-    { pattern: /\bimmediate(ly)?\b/gi, weight: 15 },
-    { pattern: /\bhurry\b/gi, weight: 20 },
-    { pattern: /\blimited\s+(time|position|seat|slot|spot)/gi, weight: 25 },
-    { pattern: /\blast\s+chance\b/gi, weight: 25 },
-    { pattern: /\bact\s+now\b/gi, weight: 20 },
-    { pattern: /\bdon'?t\s+(miss|delay|wait)\b/gi, weight: 20 },
-    { pattern: /\bapply\s+(today|now|immediately|soon)\b/gi, weight: 15 },
-    { pattern: /\bfirst\s+(come|serve|basis)/gi, weight: 20 },
-    { pattern: /\bonly\s+\d+\s+(day|hour|position|seat|slot)/gi, weight: 25 },
-    { pattern: /\bfew\s+(day|hour|position|seat|slot)\s+(left|remain)/gi, weight: 25 },
-    { pattern: /\brush\b/gi, weight: 15 },
-    { pattern: /\bquick\b/gi, weight: 10 },
-    { pattern: /\bfast\b/gi, weight: 10 },
-    { pattern: /\bexpress\b/gi, weight: 10 },
-    { pattern: /\binstant\b/gi, weight: 15 },
-    { pattern: /\bdeadline\b/gi, weight: 10 },
-    { pattern: /\bASAP\b/g, weight: 20 },
-    { pattern: /\bnow\b/gi, weight: 3 },
-    { pattern: /\btoday\b/gi, weight: 3 },
-    { pattern: /\bopportunity\s+of\s+a\s+lifetime\b/gi, weight: 25 },
-    { pattern: /\bonce\s+in\s+a\s+lifetime\b/gi, weight: 25 }
-  ];
-
-  let foundCount = 0;
-  let totalUrgencyScore = 0;
-  let foundPhrases = [];
-
-  for (const { pattern, weight } of urgencyPhrases) {
-    const matches = text.match(pattern);
-    if (matches) {
-      foundCount += matches.length;
-      totalUrgencyScore += weight * matches.length;
-      foundPhrases.push(matches[0]);
-    }
-  }
-
-  if (totalUrgencyScore >= 120) {
-    score = 80;
-    details = `Extreme urgency pressure detected. Found ${foundCount} urgency indicators (${foundPhrases.slice(0, 5).join(', ')}...). Scammers create false urgency to bypass your critical thinking.`;
-  } else if (totalUrgencyScore >= 60) {
-    score = 50;
-    details = `High urgency pressure detected. Found ${foundCount} urgency indicators. While some urgency is normal, excessive pressure is a scam tactic.`;
-  } else if (totalUrgencyScore >= 30) {
-    score = 25;
-    details = `Moderate urgency detected with ${foundCount} urgency-related phrases. Some legitimate positions may be urgent, but stay cautious.`;
-  } else if (foundCount > 0) {
-    score = 10;
-    details = `Low urgency detected with ${foundCount} urgency-related phrases. This appears normal.`;
-  } else {
-    details = 'No urgency pressure detected in the job posting.';
-  }
-
-  return { score, details };
-};
-
-const calculateRiskScore = (allResults) => {
-  const weights = {
-    keywordAnalysis: 0.40,
-    salaryAnalysis: 0.10,
-    emailAnalysis: 0.10,
-    urlAnalysis: 0.10,
-    phoneAnalysis: 0.05,
-    companyAnalysis: 0.05,
-    textQualityAnalysis: 0.05,
-    urgencyAnalysis: 0.15
-  };
-
-  let weightedScore = 0;
-  let totalWeight = 0;
-
-  for (const [key, weight] of Object.entries(weights)) {
-    if (allResults[key] && (allResults[key].score || 0) > 10) {
-      weightedScore += (allResults[key].score || 0) * weight;
-      totalWeight += weight;
-    }
-  }
-
-  if (totalWeight === 0) return 0;
-
-  const finalScore = Math.round(weightedScore / totalWeight);
-
-  return Math.min(100, Math.max(0, finalScore));
-};
-
-const getRiskLevel = (riskScore) => {
-  if (riskScore <= 20) return 'Safe';
-  if (riskScore <= 50) return 'Suspicious';
-  return 'Scam';
-};
-
-const generateExplanation = (allResults, riskLevel, keywordsFound) => {
-  const highScoreAreas = [];
-  const mediumScoreAreas = [];
-
-  const areaNames = {
-    keywordAnalysis: 'Keyword analysis',
-    salaryAnalysis: 'Salary analysis',
-    emailAnalysis: 'Email analysis',
-    urlAnalysis: 'URL analysis',
-    phoneAnalysis: 'Phone analysis',
-    companyAnalysis: 'Company check',
-    textQualityAnalysis: 'Text quality',
-    urgencyAnalysis: 'Urgency analysis'
-  };
-
-  for (const [key, result] of Object.entries(allResults)) {
-    if (result && result.score !== undefined) {
-      const name = areaNames[key] || key;
-      if (result.score >= 50) {
-        highScoreAreas.push(name);
-      } else if (result.score >= 20) {
-        mediumScoreAreas.push(name);
-      }
-    }
-  }
-
-  let explanation = '';
-
-  if (riskLevel === 'Safe') {
-    explanation = 'This job posting appears Safe. Our analysis found no significant scam indicators. ';
-    if (highScoreAreas.length === 0 && mediumScoreAreas.length === 0) {
-      explanation += 'All checks passed with minimal risk flags. ';
-    } else {
-      explanation += 'Minor flags were noted but overall risk is low. ';
-    }
-  } else if (riskLevel === 'Suspicious') {
-    explanation = 'This job posting appears Suspicious. We found several concerning indicators that warrant caution. ';
-    if (highScoreAreas.length > 0) {
-      explanation += `High-risk areas: ${highScoreAreas.join(', ')}. `;
-    }
-    if (mediumScoreAreas.length > 0) {
-      explanation += `Moderate concerns in: ${mediumScoreAreas.join(', ')}. `;
-    }
-  } else {
-    explanation = 'This job posting appears to be a Scam. Multiple strong scam indicators were detected. ';
-    explanation += 'We strongly advise against engaging with this posting. ';
-    if (highScoreAreas.length > 0) {
-      explanation += `Critical risk areas detected: ${highScoreAreas.join(', ')}. `;
-    }
-    if (mediumScoreAreas.length > 0) {
-      explanation += `Additional concerns in: ${mediumScoreAreas.join(', ')}. `;
-    }
-  }
-
-  const moneyKeywords = keywordsFound.filter(k => k.category === 'money');
-  const urgentKeywords = keywordsFound.filter(k => k.category === 'urgency' || k.category === 'pressure');
-  const benefitKeywords = keywordsFound.filter(k => k.category === 'fake_benefits' || k.category === 'too_good_true');
-  const investKeywords = keywordsFound.filter(k => k.category === 'investment');
-
-  if (moneyKeywords.length > 0) {
-    explanation += `This posting asks for money (${moneyKeywords.map(k => k.keyword).join(', ')}), which is a major red flag. Legitimate employers never ask for payments. `;
-  }
-  if (investKeywords.length > 0) {
-    explanation += `Investment/pyramid scheme language detected. This may be an MLM or Ponzi scheme. `;
-  }
-  if (benefitKeywords.length > 0) {
-    explanation += `Unrealistic promises detected (${benefitKeywords.map(k => k.keyword).join(', ')}). If it sounds too good to be true, it probably is. `;
-  }
-  if (urgentKeywords.length > 0) {
-    explanation += `High-pressure urgency tactics detected. Scammers rush you to prevent careful consideration. `;
-  }
-
-  const detailSummaries = [];
-  for (const [key, result] of Object.entries(allResults)) {
-    if (result && result.details && result.score >= 15) {
-      detailSummaries.push(result.details);
-    }
-  }
-  if (detailSummaries.length > 0) {
-    explanation += detailSummaries.join(' ');
-  }
-
-  return explanation;
-};
-
-const analyzeJobPosting = async (data) => {
-  const toText = (v) => {
-    if (v === undefined || v === null) return '';
-    return typeof v === 'string' ? v : String(v);
-  };
-
-  const {
-    jobTitle,
-    companyName,
-    jobDescription,
-    salary,
-    location,
-    recruiterEmail,
-    phoneNumber,
-    website,
-    applyLink,
-    skills
-  } = data;
-
-  const keywordResult = analyzeKeywords(toText(jobTitle), toText(jobDescription), skills);
-  const salaryResult = analyzeSalary(toText(salary));
-  const emailResult = analyzeEmail(toText(recruiterEmail));
-  const urlResult = analyzeURL(toText(website), toText(applyLink));
-  const phoneResult = analyzePhone(toText(phoneNumber));
-  const companyResult = await analyzeCompanyInfo(toText(companyName), toText(location));
-  const textQualityResult = analyzeTextQuality(toText(jobDescription));
-  const urgencyResult = analyzeUrgency(toText(jobDescription));
-
-  const allResults = {
-    keywordAnalysis: keywordResult,
-    salaryAnalysis: salaryResult,
-    emailAnalysis: emailResult,
-    urlAnalysis: urlResult,
-    phoneAnalysis: phoneResult,
-    companyAnalysis: companyResult,
-    textQualityAnalysis: textQualityResult,
-    urgencyAnalysis: urgencyResult
-  };
-
-  const riskScore = calculateRiskScore(allResults);
-  const riskLevel = getRiskLevel(riskScore);
-
-  const keywordsFound = keywordResult.keywordsFound.map(kw => {
-    const entry = scamKeywords.find(e => e.keyword === kw);
-    if (entry) {
-      return { keyword: kw, category: entry.category, severity: entry.severity, points: entry.points };
-    }
-    return { keyword: kw, category: 'unknown', severity: 1, points: 5 };
-  });
-
-  const aiExplanation = generateExplanation(allResults, riskLevel, keywordsFound);
-
-  return {
-    riskScore,
-    riskLevel,
-    aiExplanation,
-    keywordsFound,
-    details: allResults
-  };
-};
+/* -------------------------------------------------------------------------- */
 
 module.exports = {
   analyzeJobPosting,
-  analyzeKeywords,
+  getRiskLevel,
+  calculateRiskScore,
+  generateExplanation,
+  // keep legacy analyzer exports available
+  analyzeKeywords: (title, desc, skills) => analyzeScamLanguage(title, desc, ''),
   analyzeSalary,
   analyzeEmail,
-  analyzeURL,
+  analyzeURL: (website, applyLink) => analyzeJobSource(website, applyLink, null),
   analyzePhone,
-  analyzeCompanyInfo,
-  analyzeTextQuality,
   analyzeUrgency,
-  calculateRiskScore,
-  getRiskLevel,
-  generateExplanation
+  lookupCompany,
+  parseHostname,
+  detectTyposquat,
+  isOfficialMatch,
+  hasSuspiciousTLD,
+  isShortener,
+  mapStatusToRiskScore
 };
