@@ -8,7 +8,8 @@ const {
   addCompany,
   updateCompany
 } = require('../controllers/companyController');
-const { protect, admin } = require('../middleware/auth');
+const { protect } = require('../middleware/auth');
+const { admin } = require('../middleware/admin');
 const { validateCompany, handleValidationErrors } = require('../middleware/validate');
 
 router.get('/search', searchCompany);
