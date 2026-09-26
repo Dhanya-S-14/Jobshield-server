@@ -19,7 +19,9 @@ test('1. Microsoft + official domain + corporate email = fully verified', async 
   assert.equal(r.emailVerification.status, 'Verified');
   assert.equal(r.recruiterVerification.status, 'Verified');
   assert.equal(r.verificationLevel, 'enterprise-verified');
-  assert.ok(r.trustScore >= 85, `trustScore should be high, got ${r.trustScore}`);
+  assert.equal(r.trustScore, 100, 'trusted-database companies must display 100%');
+  assert.equal(r.riskScore, 0);
+  assert.equal(r.webInfo, null);
   assert.equal(r.company.officialDomain, 'microsoft.com');
 });
 
@@ -41,6 +43,7 @@ test('3. TCS aliases all resolve to the same trusted identity', async () => {
     assert.equal(r.companyIdentity.verified, true, `alias "${alias}" should resolve as verified`);
     assert.equal(r.company.officialDomain, 'tcs.com');
     assert.equal(r.verificationLevel, 'identity-verified');
+    assert.equal(r.trustScore, 100);
   }
 });
 

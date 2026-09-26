@@ -471,6 +471,12 @@ async function getCompanyVerification(input, options = {}) {
 
   const found = !!resolvedCompany || !!dbCompany;
 
+  // Rule: companies from the Trusted Company Database display a 100% trust
+  // rating. Only legit DB matches — impersonations/suspicious stay low.
+  if (found && level !== 'suspicious') {
+    trustScore = 100;
+  }
+
   // For companies NOT in the trusted database do not expose a trust % —
   // instead attach basic info found via a public web search.
   let webInfo = null;
