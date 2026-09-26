@@ -76,6 +76,40 @@ const CompanyVerificationBlock = ({ verification }) => {
 
       {rows.map((r, i) => <Row key={i} colors={colors} {...r} />)}
 
+      {verification.verificationLevel === 'unknown' && (
+        <Text style={[styles.unknownNote, { color: colors.textMuted }]}>
+          Not in JobShield&apos;s Trusted Company Database — no trust percentage is shown for unknown companies.
+          Below is the basic information found for this company online:
+        </Text>
+      )}
+
+      {!!verification.webInfo && (
+        <View style={[styles.webInfoBox, { borderColor: colors.borderLight, backgroundColor: colors.surfaceHover || colors.surface }]}>
+          {!!verification.webInfo.name && (
+            <Text style={[styles.webInfoName, { color: colors.text }]}>{verification.webInfo.name}</Text>
+          )}
+          {!!verification.webInfo.description && (
+            <Text style={[styles.webInfoDesc, { color: colors.textSecondary }]}>
+              {verification.webInfo.description.length > 350
+                ? `${verification.webInfo.description.slice(0, 350)}…`
+                : verification.webInfo.description}
+            </Text>
+          )}
+          <View style={styles.webInfoMeta}>
+            {!!verification.webInfo.source && (
+              <Text style={[styles.webInfoSource, { color: colors.textMuted }]}>Source: {verification.webInfo.source}</Text>
+            )}
+            {!!verification.webInfo.url && (
+              <TouchableOpacity onPress={() => Linking.openURL(verification.webInfo.url)}>
+                <Text style={[styles.webInfoLink, { color: colors.primary }]}>
+                  Learn more <Ionicons name="open-outline" size={12} color={colors.primary} />
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+
       {!!company.officialDomain && (
         <View style={styles.domainRow}>
           <Text style={[styles.domainLabel, { color: colors.textSecondary }]}>Official domain: </Text>
@@ -125,6 +159,13 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: typography.md, fontWeight: '600' },
   rowStatus: { fontSize: typography.md, fontWeight: '700' },
   rowDetail: { fontSize: typography.xs, lineHeight: 16, marginTop: 1 },
+  unknownNote: { fontSize: typography.xs, lineHeight: 16, marginTop: spacing.sm, fontStyle: 'italic' },
+  webInfoBox: { marginTop: spacing.sm, padding: spacing.sm, borderRadius: 8, borderWidth: 1 },
+  webInfoName: { fontSize: typography.md, fontWeight: '700' },
+  webInfoDesc: { fontSize: typography.xs, lineHeight: 16, marginTop: 3 },
+  webInfoMeta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
+  webInfoSource: { fontSize: typography.xs, flexShrink: 1 },
+  webInfoLink: { fontSize: typography.sm, textDecorationLine: 'underline' },
   domainRow: { flexDirection: 'row', marginTop: spacing.sm },
   domainLabel: { fontSize: typography.sm },
   domainValue: { fontSize: typography.sm, fontWeight: '600' },
