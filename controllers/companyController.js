@@ -104,7 +104,9 @@ const verifyCompany = async (req, res) => {
       });
     }
 
-    const legacy = scoreToLegacyRisk(verification.trustScore);
+    const legacy = verification.company.found
+      ? scoreToLegacyRisk(verification.trustScore)
+      : { riskLevel: 'Unverified', riskColor: 'gray' };
 
     res.status(200).json({
       success: true,
@@ -133,6 +135,7 @@ const verifyCompany = async (req, res) => {
         domainVerification: verification.domainVerification,
         emailVerification: verification.emailVerification,
         recruiterVerification: verification.recruiterVerification,
+        webInfo: verification.webInfo,
         breakdown: verification.breakdown,
         warnings: verification.warnings,
         signals,

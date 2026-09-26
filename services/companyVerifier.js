@@ -114,10 +114,79 @@ const findRecruiterEmail = (recruiterEmail) => {
   return parts[0];
 };
 
+const fetchJson = async (url, timeoutMs = 8000) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'JobShield/1.0 (company verifier)' },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Best-effort basic company info from public sources (Wikipedia REST, then
+ * DuckDuckGo instant answers). Never blocks or fails the verification — on any
+ * error this returns null and the response simply has no webInfo.
+ */
+const fetchWebInfo = async (companyName) => {
+  if (!companyName) return null;
+  const q = String(companyName).trim();
+  if (!q) return null;
+
+  try {
+    const os = await fetchJson(
+      `https://en.wikipedia.org/w/api.php?action=opensearch&format=json&limit=1&namespace=0&origin=*&search=${encodeURIComponent(q)}`
+    );
+    const title = os && Array.isArray(os[1]) && os[1][0] ? String(os[1][0]) : null;
+    if (title) {
+      const summary = await fetchJson(
+        `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`
+      );
+      if (summary && summary.extract) {
+        return {
+          name: summary.title || title,
+          description: String(summary.extract),
+          source: 'Wikipedia',
+          url: summary.content_urls && summary.content_urls.desktop
+            ? summary.content_urls.desktop.page
+            : `https://en.wikipedia.org/wiki/${encodeURIComponent((summary.title || title).replace(/ /g, '_'))}`,
+          thumbnail: summary.thumbnail && summary.thumbnail.source ? summary.thumbnail.source : null,
+        };
+      }
+    }
+  } catch (e) { /* fall through */ }
+
+  try {
+    const ddg = await fetchJson(
+      `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`
+    );
+    if (ddg && ddg.AbstractText) {
+      return {
+        name: q,
+        description: String(ddg.AbstractText),
+        source: 'DuckDuckGo',
+        url: ddg.AbstractURL || `https://duckduckgo.com/?q=${encodeURIComponent(q)}`,
+        thumbnail: null,
+      };
+    }
+  } catch (e) { /* fall through */ }
+
+  return null;
+};
+
 /**
  * Main entry point. Returns full company verification object.
+ * options.webInfo = false disables the web lookup (used by offline tests).
  */
-async function getCompanyVerification(input) {
+async function getCompanyVerification(input, options = {}) {
   const opts = input || {};
   const companyName = String(opts.companyName || '').trim();
   const recruiterEmailRaw = String(opts.recruiterEmail || '').trim();
@@ -397,7 +466,16 @@ async function getCompanyVerification(input) {
       : 'Company identity is real, but not every detail verifies — confirm the job position on the company\u2019s official website before sharing anything.';
   } else {
     level = 'unknown';
-    recommendation = 'Company is not in our trusted database. Unknown is not "scam" — verify through official channels before applying.';
+    recommendation = 'Company is not in our Trusted Company Database, so no trust score is shown. See the online info above and verify through official channels before applying.';
+  }
+
+  const found = !!resolvedCompany || !!dbCompany;
+
+  // For companies NOT in the trusted database do not expose a trust % —
+  // instead attach basic info found via a public web search.
+  let webInfo = null;
+  if (!found && options.webInfo !== false && opts.webInfo !== false) {
+    webInfo = await fetchWebInfo(companyName).catch(() => null);
   }
 
   /* ---------------- Compact statuses for the UI ---------------- */
@@ -445,8 +523,9 @@ async function getCompanyVerification(input) {
     impersonationOf: impersonation.nearTo,
     impersonationReason: impersonation.reason,
     verificationLevel: level,
-    trustScore,
+    trustScore: found ? trustScore : null,
     riskScore: 100 - trustScore,
+    webInfo,
     breakdown,
     warnings,
     recommendation,

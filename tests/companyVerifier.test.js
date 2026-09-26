@@ -49,12 +49,13 @@ test('4. Unknown company is NOT auto-verified and NOT auto-flagged as scam', asy
     companyName: 'Amasia Softwares', website: 'https://amasia.example.com',
     jobTitle: 'Developer', jobDescription: 'Full stack role in Chennai.',
     recruiterEmail: 'hr@amasia.example.com',
-  });
+  }, { webInfo: false });
   assert.equal(r.companyIdentity.verified, false);
   assert.equal(r.verificationLevel, 'unknown');
   assert.equal(r.warnings.length, 0, 'unknown company must not generate scam warnings');
-  assert.ok(r.trustScore >= 40, `unknown company trust should not be extreme, got ${r.trustScore}`);
-  assert.match(r.recommendation, /Unknown|unknown/i);
+  assert.equal(r.trustScore, null, 'unknown company must NOT expose a trust percentage');
+  assert.equal(r.webInfo, null);
+  assert.match(r.recommendation, /trust score/i);
 });
 
 test('5. careers subdomain of official domain counts as Verified domain', async () => {
@@ -93,12 +94,12 @@ test('8. Unknown company + scam payment language = company Unknown but posting f
     companyName: 'Swift Freelancer Ltd', website: 'https://swiftfreelancer.example.com',
     jobTitle: 'Data Entry', jobDescription: 'Pay Rs.5000 registration fee to start. Limited seats, urgent joining. WhatsApp only.',
     recruiterEmail: 'contactme@gmail.com',
-  });
+  }, { webInfo: false });
   assert.equal(r.companyIdentity.verified, false);
   assert.equal(r.verificationLevel, 'unknown');
   assert.equal(r.jobPosting.status, 'Suspicious');
   assert.ok(r.jobPosting.scamPhrases.length > 0, 'scam phrases should be reported');
-  assert.ok(r.trustScore <= 45, `scam language should cap trust, got ${r.trustScore}`);
+  assert.equal(r.trustScore, null, 'unknown company must NOT expose a trust percentage');
 });
 
 test('Registry: no duplicate trusted company names (dedup active)', () => {
