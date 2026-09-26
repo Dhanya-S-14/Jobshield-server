@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, SafeAreaView, KeyboardAvoidingView, Platform, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, SafeAreaView, KeyboardAvoidingView, Platform, StyleSheet, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -113,27 +113,41 @@ const CompanyVerifyScreen = ({ navigation }) => {
 
           {result && !loading && (
             <View>
-              {/* Trust Score Circle */}
+              {/* Trust Score Circle — only shown for companies in the Trusted Database */}
               <View style={[styles.scoreSection, { backgroundColor: colors.card, borderColor: colors.borderLight }, shadows.md]}>
-                <View style={[styles.scoreCircle, { borderColor: getScoreColor(result.trustScore, colors) }]}>
-                  <Text style={[styles.scoreNumber, { color: getScoreColor(result.trustScore, colors) }]}>
-                    {result.trustScore}
-                  </Text>
-                  <Text style={styles.scoreMax}>/ 100</Text>
-                </View>
-                <Text style={[styles.companyName, { color: colors.text }]}>{result.company?.name || query}</Text>
-                <Text style={[styles.scoreLabel, { color: getScoreColor(result.trustScore, colors) }]}>
-                  {getScoreLabel(result.trustScore)} Trust Score
-                </Text>
+                {typeof result.trustScore === 'number' ? (
+                  <>
+                    <View style={[styles.scoreCircle, { borderColor: getScoreColor(result.trustScore, colors) }]}>
+                      <Text style={[styles.scoreNumber, { color: getScoreColor(result.trustScore, colors) }]}>
+                        {result.trustScore}
+                      </Text>
+                      <Text style={styles.scoreMax}>/ 100</Text>
+                    </View>
+                    <Text style={[styles.companyName, { color: colors.text }]}>{result.company?.name || query}</Text>
+                    <Text style={[styles.scoreLabel, { color: getScoreColor(result.trustScore, colors) }]}>
+                      {getScoreLabel(result.trustScore)} Trust Score
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Ionicons name="help-circle-outline" size={44} color={colors.textMuted} />
+                    <Text style={[styles.companyName, { color: colors.text }]}>{result.company?.name || query}</Text>
+                    <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>
+                      Not in Trusted Database — No Trust Score
+                    </Text>
+                  </>
+                )}
                 <View style={styles.badgeRow}>
                   <View style={[styles.riskBadge, {
                     backgroundColor: result.riskColor === 'green' ? colors.successLight :
                                     result.riskColor === 'orange' ? colors.warningLight :
+                                    result.riskColor === 'gray' ? colors.borderLight :
                                     colors.errorLight
                   }]}>
                     <Text style={[styles.riskBadgeText, {
                       color: result.riskColor === 'green' ? colors.success :
                              result.riskColor === 'orange' ? colors.warning :
+                             result.riskColor === 'gray' ? colors.textMuted :
                              colors.error
                     }]}>{result.riskLevel}</Text>
                   </View>
@@ -188,6 +202,34 @@ const CompanyVerifyScreen = ({ navigation }) => {
                   </View>
                 ) : null}
               </Card>
+
+              {/* Online basic info for unknown companies */}
+              {result.webInfo && (
+                <Card style={styles.signalsCard}>
+                  <Text style={[styles.cardTitle, { color: colors.textSecondary }]}>
+                    About {result.webInfo.name || query}
+                  </Text>
+                  {result.webInfo.description ? (
+                    <Text style={[styles.signalText, { color: colors.text }]}>
+                      {result.webInfo.description.length > 400
+                        ? `${result.webInfo.description.slice(0, 400)}…`
+                        : result.webInfo.description}
+                    </Text>
+                  ) : null}
+                  <View style={styles.webInfoMeta}>
+                    {result.webInfo.source ? (
+                      <Text style={[styles.webInfoSource, { color: colors.textMuted }]}>Source: {result.webInfo.source}</Text>
+                    ) : null}
+                    {result.webInfo.url ? (
+                      <TouchableOpacity onPress={() => Linking.openURL(result.webInfo.url)}>
+                        <Text style={[styles.webInfoLink, { color: colors.primary }]}>
+                          Learn more <Ionicons name="open-outline" size={12} color={colors.primary} />
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </Card>
+              )}
 
               {/* Analysis Signals */}
               {result.signals && result.signals.length > 0 && (
@@ -257,6 +299,9 @@ const styles = StyleSheet.create({
   signalRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: spacing.sm + 2 },
   signalIcon: { marginRight: spacing.sm, marginTop: 1 },
   signalText: { fontSize: typography.sm, flex: 1, lineHeight: 20 },
+  webInfoMeta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.md },
+  webInfoSource: { fontSize: typography.xs, flexShrink: 1 },
+  webInfoLink: { fontSize: typography.sm, textDecorationLine: 'underline' },
 });
 
 export default CompanyVerifyScreen;
