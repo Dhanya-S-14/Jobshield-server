@@ -4,7 +4,7 @@ import { API_URL } from '../config';
 
 const api = axios.create({
   baseURL: API_URL,
-  timeout: 60000,
+  timeout: 120000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -28,6 +28,16 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    const config = error.config || {};
+    if (!error.response && !config._retried) {
+      config._retried = true;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      try {
+        return await api(config);
+      } catch (retryErr) {
+        return Promise.reject(retryErr);
+      }
+    }
     if (error.response) {
       const { status, data } = error.response;
       if (status === 401) {
@@ -35,10 +45,8 @@ api.interceptors.response.use(
       }
       const message = data?.message || data?.error || 'An error occurred';
       return Promise.reject(new Error(message));
-    } else if (error.request) {
-      return Promise.reject(new Error('Network error. Please check your connection.'));
     }
-    return Promise.reject(new Error('An unexpected error occurred'));
+    return Promise.reject(new Error('Network error. Please check your connection and try again.'));
   }
 );
 
