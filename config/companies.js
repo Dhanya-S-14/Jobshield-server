@@ -127,7 +127,7 @@ const companies = [
 
   /* ------------------------------ E-commerce / Indian Consumer ------------------------------ */
   { name: 'Walmart Global Tech', shortName: 'Walmart', aliases: ['walmart global technology', 'walmart', 'wal mart global tech'], domain: 'walmartglobaltech.com', alternateDomains: ['walmart.com', 'careers.walmart.com'], industry: 'Retail / Technology', country: 'Global', companyType: 'MNC' },
-  { name: 'Flipkart', shortName: 'Flipkart', aliases: ['flipkart internet', 'flipkart private limited', 'flipkart india'], domain: 'flipkart.com', alternateDomains: [], industry: 'E-commerce', country: 'India', companyType: 'MNC' },
+  { name: 'Flipkart', shortName: 'Flipkart', aliases: ['flipkart internet', 'flipkart private limited', 'flipkart india'], domain: 'flipkart.com', alternateDomains: ['flipkartcareers.com'], industry: 'E-commerce', country: 'India', companyType: 'MNC' },
   { name: 'Meesho', shortName: 'Meesho', aliases: ['meesho inc', 'meesho technologies'], domain: 'meesho.com', alternateDomains: [], industry: 'E-commerce', country: 'India', companyType: 'MNC' },
   { name: 'Zomato', shortName: 'Zomato', aliases: ['zomato limited', 'zomato media', 'zomato india'], domain: 'zomato.com', alternateDomains: [], industry: 'Food Delivery', country: 'India', companyType: 'MNC' },
   { name: 'Swiggy', shortName: 'Swiggy', aliases: ['bundl technologies', 'swiggy india'], domain: 'swiggy.com', alternateDomains: [], industry: 'Food Delivery', country: 'India', companyType: 'MNC' },
