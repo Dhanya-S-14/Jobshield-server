@@ -103,6 +103,10 @@ const scanJob = async (req, res) => {
       riskScore: detectionResult.riskScore,
       trustScore: detectionResult.trustScore,
       riskLevel: detectionResult.riskLevel,
+      companyStatus: detectionResult.companyStatus,
+      companyStatusLevel: detectionResult.companyStatusLevel,
+      jobRisk: detectionResult.jobRisk,
+      jobRiskLevel: detectionResult.jobRiskLevel,
       verification: detectionResult.verification,
       companyVerification,
       evidence: detectionResult.evidence,
@@ -120,7 +124,11 @@ const scanJob = async (req, res) => {
         evidence: detectionResult.evidence,
         warnings: detectionResult.warnings,
         breakdown: detectionResult.breakdown,
-        details: detectionResult.details
+        details: detectionResult.details,
+        companyStatus: detectionResult.companyStatus,
+        companyStatusLevel: detectionResult.companyStatusLevel,
+        jobRisk: detectionResult.jobRisk,
+        jobRiskLevel: detectionResult.jobRiskLevel
       },
       keywordsFound: detectionResult.keywordsFound
     });
@@ -148,6 +156,10 @@ const scanJob = async (req, res) => {
         breakdown: detectionResult.breakdown,
         keywordsFound: detectionResult.keywordsFound,
         details: detectionResult.details,
+        companyStatus: detectionResult.companyStatus,
+        companyStatusLevel: detectionResult.companyStatusLevel,
+        jobRisk: detectionResult.jobRisk,
+        jobRiskLevel: detectionResult.jobRiskLevel,
         createdAt: scanRecord.createdAt
       }
     });

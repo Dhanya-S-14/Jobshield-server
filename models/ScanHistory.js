@@ -78,6 +78,22 @@ const ScanHistorySchema = new mongoose.Schema({
     enum: ['Highly Trusted', 'Low Risk', 'Moderate Risk', 'High Risk', 'Critical Risk'],
     required: true
   },
+  companyStatus: {
+    type: String,
+    default: ''
+  },
+  companyStatusLevel: {
+    type: String,
+    default: ''
+  },
+  jobRisk: {
+    type: String,
+    default: ''
+  },
+  jobRiskLevel: {
+    type: String,
+    default: ''
+  },
   verification: {
     type: Schema.Types.Mixed,
     default: null
