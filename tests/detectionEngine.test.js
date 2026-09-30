@@ -210,6 +210,22 @@ test('Separated verdicts: official company + platform link stays Verified/Low Ri
   assert.equal(r.jobRiskLevel, 'verified');
 });
 
+test('Official careers subdomain is NOT mistaken for a shortener (t.co substring false positive)', async () => {
+  const r = await analyzeJobPosting({
+    jobTitle: 'SDE-2',
+    companyName: 'Microsoft',
+    jobDescription: 'We are hiring a SDE-2 for our Bengaluru office. Responsibilities: design and build cloud services, write clean tests. Qualifications: 4+ years experience, strong CS fundamentals. We offer competitive salary, health insurance, paid leave, PF and ESI as per policy.',
+    salary: '30-40 LPA',
+    location: 'Bengaluru',
+    recruiterEmail: 'recruit@microsoft.com',
+    website: 'https://careers.microsoft.com',
+    applyLink: 'https://careers.microsoft.com'
+  });
+  assert.equal(r.details.jobSource.status, 'positive', 'careers.microsoft.com is official, not a shortener');
+  assert.equal(r.companyStatusLevel, 'verified');
+  assert.equal(r.jobRiskLevel, 'verified');
+});
+
 test('Separated verdicts: payment request => Likely Fraudulent, unknown company => Needs Verification (not fake)', async () => {
   const scamR = await analyzeJobPosting({
     jobTitle: 'Work From Home Data Entry',

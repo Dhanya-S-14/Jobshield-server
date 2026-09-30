@@ -106,7 +106,7 @@ const hasSuspiciousTLD = (host) => {
   return SUSPICIOUS_TLDS.has(tld);
 };
 
-const isShortener = (host) => SHORTENERS.has(host) || Array.from(SHORTENERS).some((s) => host.includes(s));
+const isShortener = (host) => Array.from(SHORTENERS).some((s) => host === s || host.endsWith('.' + s));
 
 const isFreeHosting = (host) => FREE_HOSTING.some((f) => host.includes(f));
 
