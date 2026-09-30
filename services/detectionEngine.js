@@ -64,8 +64,19 @@ const SUSPICIOUS_TLDS = new Set([
 
 const SHORTENERS = new Set([
   'bit.ly', 'tinyurl.com', 'goo.gl', 'ow.ly', 'cutt.ly', 'rb.gy', 'is.gd',
-  't.co', 'tiny.cc', 'bit.do', 'shorturl.at', 'buff.ly', 'rebrand.ly', 'lnkd.in'
+  't.co', 'tiny.cc', 'bit.do', 'shorturl.at', 'buff.ly', 'rebrand.ly'
 ]);
+
+// Recognized job platforms / professional networks. Links to these are NOT a
+// red flag — real recruiters post and accept applications on them.
+const JOB_PLATFORMS = [
+  'linkedin.com', 'lnkd.in', 'naukri.com', 'indeed.com', 'indeed.in', 'glassdoor.com',
+  'monster.com', 'shine.com', 'timesjobs.com', 'apna.co', 'apna.com', 'instahyre.com',
+  'cutshort.io', 'wellfound.com', 'workday.com', 'successfactors.com',
+  'internshala.com', 'hirist.com', 'gethired.com', 'hirect.in'
+];
+
+const isJobPlatform = (host) => JOB_PLATFORMS.some((p) => host === p || host.endsWith('.' + p) || host.includes(p));
 
 const FREE_HOSTING = ['blogspot', 'wordpress', 'wix', 'weebly', 'squarespace', 'shopify', 'blogger', 'godaddysites'];
 
@@ -226,12 +237,15 @@ const analyzeCompanyVerification = (companyName, website, applyLink) => {
       return result;
     }
 
+    const onPlatform = urlHosts.some((h) => isJobPlatform(h.hostname));
     result.verification.domainMatched = false;
-    result.earned = -7;
+    result.earned = onPlatform ? -3 : -4;
     result.status = 'warning';
-    result.summary = 'Company name matches a real employer, but the posting URL does not use its official domain.';
-    result.details.push('A real company name combined with an unrelated website is a classic impersonation pattern.');
-    result.details.push(`Official domain is "${company.domain}".`);
+    result.summary = onPlatform
+      ? `Company matches a real employer and the posting points to a recognized job platform.`
+      : 'Company matches a real employer, but the posting URL is not its official domain.';
+    result.details.push('A changed or unmatching URL is NOT proof of fraud — it only means the link could not be tied to the official domain.');
+    result.details.push(`Official domain is "${company.domain}". Confirm the link on the company's official website/careers page.`);
     return result;
   }
 
@@ -273,9 +287,13 @@ const analyzeJobSource = (website, applyLink, company) => {
 
   let worst = 0; // most negative earned
   let officialFound = false;
+  let platformFound = false;
 
   for (const h of urlHosts) {
-    if (isShortener(h.hostname)) {
+    if (isJobPlatform(h.hostname)) {
+      platformFound = true;
+      result.details.push(`URL "${h.hostname}" is a recognized job/career platform — normal for job postings.`);
+    } else if (isShortener(h.hostname)) {
       worst = Math.min(worst, -20);
       result.details.push(`URL "${h.hostname}" is a link shortener — scammers use these to hide the real destination.`);
     } else if (hasSuspiciousTLD(h.hostname)) {
@@ -288,13 +306,9 @@ const analyzeJobSource = (website, applyLink, company) => {
       officialFound = true;
       result.details.push(`URL "${h.hostname}" is an official domain for the claimed company.`);
     } else if (!h.isHttps) {
-      worst = Math.min(worst, -6);
-      result.details.push(`URL "${h.hostname}" does not use HTTPS encryption.`);
+      result.details.push(`URL "${h.hostname}" does not use HTTPS — verify the site directly before entering anything.`);
     } else {
       result.details.push(`URL "${h.hostname}" is a normal custom domain (neutral signal by itself).`);
-    }
-    if (!h.isHttps && worst > -6 && !isShortener(h.hostname) && !hasSuspiciousTLD(h.hostname)) {
-      worst = Math.min(worst, -6);
     }
   }
 
@@ -302,6 +316,10 @@ const analyzeJobSource = (website, applyLink, company) => {
     result.earned = 20;
     result.status = 'positive';
     result.summary = 'The job links to an official company domain.';
+  } else if (platformFound && worst >= 0) {
+    result.earned = 4;
+    result.status = 'positive';
+    result.summary = 'The job links to a recognized job platform.';
   } else if (worst < 0) {
     result.earned = worst;
     result.status = worst <= -15 ? 'danger' : 'warning';
@@ -364,10 +382,10 @@ const analyzeEmail = (recruiterEmail, company) => {
   }
 
   if (FREE_EMAIL_DOMAINS.has(domain)) {
-    result.earned = -7;
+    result.earned = -5;
     result.status = 'warning';
     result.summary = `Recruiter uses a free personal email (@${domain}) instead of a corporate domain.`;
-    result.details.push('A free email alone does not prove a scam, but legitimate employers normally recruit from official corporate addresses.');
+    result.details.push('A free email alone does NOT prove fraud — it only reduces verification confidence. Legitimate small employers sometimes recruit from personal addresses.');
     return result;
   }
 
@@ -505,10 +523,10 @@ const analyzeJobDescription = (jobDescription) => {
   const markers = professionalMarkers.filter((m) => text.toLowerCase().includes(m));
 
   if (len < 80) {
-    result.earned = -5;
+    result.earned = -2;
     result.status = 'warning';
     result.summary = `Job description is very short (${len} characters).`;
-    result.details.push('Legitimate postings normally include responsibilities and requirements in detail.');
+    result.details.push('A brief posting is a low-signal factor — it reduces confidence but is not proof of fraud.');
   } else {
     result.earned = markers.length >= 2 ? 6 : 3;
     result.status = 'positive';
@@ -734,17 +752,27 @@ const analyzeScamLanguage = (jobTitle, jobDescription, salary) => {
     return result;
   }
 
-  const dangerous = found.filter((k) => k.category === 'money' || k.category === 'investment');
-  const strong = found.filter((k) => (k.points || 0) >= 25 && !dangerous.includes(k));
-  const medium = found.filter((k) => (k.points || 0) >= 12 && !dangerous.includes(k) && !strong.includes(k));
+  const dangerous = found.filter((k) =>
+      (k.category === 'money' || k.category === 'investment') &&
+      (k.points || 0) >= 20
+    );
+  // Words that appear in a genuine benefits/perks context (ESI, PF, insurance,
+  // reimbursement, retirement/savings products) are NEVER scam signals — they
+  // also exist inside standard company postings.
+  const BENEFIT_CONTEXT = /(?:health insurance|paid leave|per policy|as per policy|\bpf\b|\besi\b|gratuity|benefits|perks|what we offer|statutory|reimbursement|compensation package|ctc\b|savings|retirement|permanent)/i;
+  const dangerousSafe = dangerous.filter(
+    (k) => !((k.points || 0) < 25 && BENEFIT_CONTEXT.test(text))
+  );
+  const strong = found.filter((k) => (k.points || 0) >= 25 && !dangerousSafe.includes(k));
+  const medium = found.filter((k) => (k.points || 0) >= 12 && !dangerousSafe.includes(k) && !strong.includes(k));
 
   const names = (arr) => arr.slice(0, 6).map((k) => k.keyword).join(', ');
-  if (dangerous.length > 0) {
+  if (dangerousSafe.length > 0) {
     result.earned = -5;
     result.status = 'danger';
     result.summary = 'Money/investment scam language detected.';
-    result.details.push(`Found: ${names(dangerous)}.`);
-    result.details.push(dangerous.some((k) => k.category === 'money')
+    result.details.push(`Found: ${names(dangerousSafe)}.`);
+    result.details.push(dangerousSafe.some((k) => k.category === 'money')
       ? 'Asking candidates for fees/deposits is the strongest scam signal.'
       : 'Investment/pyramid language indicates a potential MLM or Ponzi scheme.');
   } else if (strong.length > 0) {
@@ -810,15 +838,16 @@ const analyzeUrgency = (jobDescription) => {
     result.summary = 'Intense urgency pressure detected.';
     result.details.push(`Found ${hits.length} urgency cues (${hits.slice(0, 5).join(', ')}).`);
   } else if (hits.length >= 3) {
-    result.earned = -4;
+    result.earned = -3;
     result.status = 'warning';
     result.summary = 'High urgency pressure detected.';
     result.details.push(`Found ${hits.length} urgency cues (${hits.slice(0, 5).join(', ')}).`);
   } else {
-    result.earned = -2;
+    // 1–2 urgency phrases (e.g. "immediate joining") are common in genuine postings
+    result.earned = -1;
     result.status = 'warning';
-    result.summary = 'Some urgency language detected.';
-    result.details.push(`Found: ${hits.join(', ')}.`);
+    result.summary = 'Mild urgency language detected.';
+    result.details.push(`Found: ${hits.join(', ')} — common in real postings, low signal by itself.`);
   }
   return result;
 };
@@ -1012,11 +1041,74 @@ const analyzeJobPosting = async (data = {}) => {
     };
   }
 
+  /* ------------------------------------------------------------------------ */
+  /* Separated verdicts: COMPANY status vs JOB risk (independent by design)   */
+  /* ------------------------------------------------------------------------ */
+  const feeDanger = safetyResult.hardRisk === true;
+  const confirmedImpersonation = companyResult.verification.typosquatDetected === true;
+  const dangerFactors = factors.filter((f) => f.status === 'danger');
+  const warningFactors = factors.filter((f) => f.status === 'warning');
+
+  // COMPANY STATUS — judged only from what could be verified. Missing, small,
+  // unknown, high-salary, Gmail-recruiter etc. never make a company "Suspicious".
+  let companyStatus;
+  let companyStatusLevel;
+  let companyStatusReason;
+  if (confirmedImpersonation) {
+    companyStatusLevel = 'suspicious';
+    companyStatus = 'Suspicious';
+    companyStatusReason = `Domain impersonation of "${verification.typosquatOf}" is confirmed — treat postings under that domain as suspicious.`;
+  } else if (verification.identityMatched && verification.domainMatched) {
+    companyStatusLevel = 'verified';
+    companyStatus = 'Verified';
+    companyStatusReason = `"${verification.claimedCompany}" is recognized and the posting links to its official domain.`;
+  } else if (verification.identityMatched) {
+    companyStatusLevel = 'needs_verification';
+    companyStatus = 'Needs Verification';
+    companyStatusReason = `"${verification.claimedCompany}" is a real employer, but the link could not be tied to its official domain — confirm through its website.`;
+  } else {
+    companyStatusLevel = 'needs_verification';
+    companyStatus = 'Needs Verification';
+    companyStatusReason = 'The company could not be independently verified. Not being verified is NOT evidence of fraud.';
+  }
+
+  // JOB RISK — red flags dominate; low-signal factors never flip this alone.
+  let jobRisk;
+  let jobRiskLevel;
+  let jobRiskReason;
+  if (feeDanger) {
+    jobRiskLevel = 'fraudulent';
+    jobRisk = 'Likely Fraudulent';
+    jobRiskReason = 'The posting asks candidates for money or sensitive credentials — legitimate employers never do this.';
+  } else if (confirmedImpersonation) {
+    jobRiskLevel = 'fraudulent';
+    jobRisk = 'Likely Fraudulent';
+    jobRiskReason = 'A confirmed impersonation domain is a strong fraud indicator for this posting.';
+  } else if (dangerFactors.length > 0) {
+    jobRiskLevel = 'suspicious';
+    jobRisk = 'Suspicious';
+    jobRiskReason = dangerFactors.map((f) => f.summary).join(' ');
+  } else if (warningFactors.length > 0) {
+    jobRiskLevel = 'needs_verification';
+    jobRisk = 'Needs Verification';
+    jobRiskReason = 'Only caution/low-signal factors were found — verify the employer and recruiter before proceeding, no payment should be involved.';
+  } else {
+    jobRiskLevel = 'verified';
+    jobRisk = 'Low Risk';
+    jobRiskReason = 'No meaningful fraud indicators were detected in the available information.';
+  }
+
   return {
     trustScore,
     riskScore,
     riskLevel,
     verdict: getVerdict(trustScore),
+    companyStatus,
+    companyStatusLevel,
+    companyStatusReason,
+    jobRisk,
+    jobRiskLevel,
+    jobRiskReason,
     aiExplanation,
     verification,
     evidence,

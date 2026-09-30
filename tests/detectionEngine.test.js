@@ -178,3 +178,56 @@ test('Deterministic: same input => identical output', async () => {
   assert.deepEqual(a.riskLevel, b.riskLevel);
   assert.deepEqual(a.aiExplanation, b.aiExplanation);
 });
+
+test('Separated verdicts: real company + gmail + unrelated URL is NOT suspicious', async () => {
+  const r = await analyzeJobPosting({
+    jobTitle: 'HR Executive',
+    companyName: 'TCS',
+    jobDescription: 'We are hiring an HR executive for our team. Responsibilities: coordinate interviews and onboarding. Qualifications: 2 years HR experience, good communication.',
+    salary: '12 LPA',
+    location: 'Pune',
+    recruiterEmail: 'hr.tcs.jobs@gmail.com',
+    website: 'https://random-recruiting-hub.in',
+    applyLink: 'https://random-recruiting-hub.in/apply'
+  });
+  assert.equal(r.companyStatusLevel, 'needs_verification', 'real employer + unverifiable link must stay at Needs Verification');
+  assert.equal(r.jobRiskLevel, 'needs_verification', 'only low-signal warnings must never reach Suspicious');
+  assert.notEqual(r.jobRiskLevel, 'suspicious');
+  assert.notEqual(r.jobRiskLevel, 'fraudulent');
+});
+
+test('Separated verdicts: official company + platform link stays Verified/Low Risk', async () => {
+  const r = await analyzeJobPosting({
+    jobTitle: 'Frontend Developer',
+    companyName: 'TCS',
+    jobDescription: LEGIT_DESC,
+    salary: '10 LPA',
+    recruiterEmail: 'careers@tcs.com',
+    website: 'https://www.tcs.com',
+    applyLink: 'https://www.linkedin.com/jobs/tcs-frontend'
+  });
+  assert.equal(r.companyStatusLevel, 'verified');
+  assert.equal(r.jobRiskLevel, 'verified');
+});
+
+test('Separated verdicts: payment request => Likely Fraudulent, unknown company => Needs Verification (not fake)', async () => {
+  const scamR = await analyzeJobPosting({
+    jobTitle: 'Work From Home Data Entry',
+    companyName: 'Quick Earn India',
+    jobDescription: 'Registration fee Rs 500 required to reserve your seat. Hurry, limited seats! Guaranteed job.',
+    recruiterEmail: 'quick.earn.jobs@gmail.com'
+  });
+  assert.equal(scamR.jobRiskLevel, 'fraudulent');
+
+  const unknownR = await analyzeJobPosting({
+    jobTitle: 'Data Analyst',
+    companyName: 'Some Unknown Startup',
+    jobDescription: LEGIT_DESC,
+    salary: '6 LPA',
+    recruiterEmail: 'hiring@recruiter-personal.com',
+    website: 'https://simple-corp-site.in'
+  });
+  assert.equal(unknownR.companyStatusLevel, 'needs_verification', 'unknown company must not be labelled Suspicious/Fraudulent');
+  assert.notEqual(unknownR.jobRiskLevel, 'suspicious', 'no strong indicators => never Suspicious');
+  assert.notEqual(unknownR.jobRiskLevel, 'fraudulent');
+});

@@ -532,12 +532,41 @@ async function getCompanyVerification(input, options = {}) {
     trustScore: found ? trustScore : null,
     riskScore: 100 - trustScore,
     webInfo,
+    companyStatus: companyStatusFor(level),
+    jobRisk: jobRiskFor(statusOf(posting)),
     breakdown,
     warnings,
     recommendation,
     checkedAt: new Date().toISOString(),
   };
 }
+
+const companyStatusFor = (level) => {
+  switch (level) {
+    case 'enterprise-verified':
+    case 'domain-verified':
+      return { level: 'verified', label: 'Verified' };
+    case 'identity-verified':
+      return { level: 'verified', label: 'Verified' };
+    case 'suspicious':
+      return { level: 'suspicious', label: 'Suspicious' };
+    default:
+      return { level: 'needs_verification', label: 'Needs Verification' };
+  }
+};
+
+const jobRiskFor = (postingStatus) => {
+  switch (postingStatus) {
+    case 'Verified':
+      return { level: 'verified', label: 'Low Risk' };
+    case 'Suspicious':
+      return { level: 'suspicious', label: 'Suspicious' };
+    case 'critical':
+      return { level: 'suspicious', label: 'Suspicious' };
+    default:
+      return { level: 'needs_verification', label: 'Needs Verification' };
+  }
+};
 
 module.exports = {
   getCompanyVerification,

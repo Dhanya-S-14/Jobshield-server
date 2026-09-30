@@ -1,4 +1,4 @@
-const CACHE_NAME = 'jobshield-v4';
+const CACHE_NAME = 'jobshield-v5';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

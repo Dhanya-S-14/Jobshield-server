@@ -3,6 +3,7 @@ const ScanHistory = require('../models/ScanHistory');
 const User = require('../models/User');
 const { analyzeJobPosting } = require('../services/detectionEngine');
 const { getCompanyVerification } = require('../services/companyVerifier');
+const { parseJobText } = require('../services/jobExtractor');
 const PDFDocument = require('pdfkit');
 
 const normalizeScanBody = (body) => {
@@ -26,11 +27,39 @@ const normalizeScanBody = (body) => {
 };
 
 const detect = async (normalized) => {
-  const { jobTitle, companyName, jobDescription, salary, location, recruiterEmail, phoneNumber, website, applyLink, skills } = normalized;
+  const { jobTitle, companyName, jobDescription, salary, location, recruiterEmail, phoneNumber, website, applyLink, skills, experience } = normalized;
   return analyzeJobPosting({
     jobTitle, companyName, jobDescription, salary, location,
-    recruiterEmail, phoneNumber, website, applyLink, skills
+    recruiterEmail, phoneNumber, website, applyLink, skills, experience
   });
+};
+
+/**
+ * Fill gaps in structured fields from OCR text / typed messages (images never
+ * arrive as clean fields). Only fills empty values; never overrides user input.
+ */
+const enrichInput = (raw) => {
+  const normalized = normalizeScanBody(raw);
+  const hasText = normalized.jobDescription && String(normalized.jobDescription).trim().length > 0;
+  if ((!normalized.companyName || !normalized.jobTitle) && hasText) {
+    const parsed = parseJobText(
+      [normalized.jobTitle, normalized.jobDescription, normalized.website, normalized.applyLink, normalized.recruiterEmail]
+        .filter(Boolean)
+        .join('\n')
+    );
+    return {
+      ...normalized,
+      jobTitle: normalized.jobTitle || parsed.jobTitle || '',
+      companyName: normalized.companyName || parsed.companyName || '',
+      salary: normalized.salary || parsed.salary || '',
+      location: normalized.location || parsed.location || '',
+      recruiterEmail: normalized.recruiterEmail || parsed.recruiterEmail || '',
+      phoneNumber: normalized.phoneNumber || parsed.phoneNumber || '',
+      website: normalized.website || parsed.website || '',
+      applyLink: normalized.applyLink || parsed.applyLink || '',
+    };
+  }
+  return normalized;
 };
 
 const scanJob = async (req, res) => {
@@ -39,7 +68,7 @@ const scanJob = async (req, res) => {
       return res.status(503).json({ success: false, message: 'Database not ready. Please try again in a few seconds.' });
     }
 
-    const normalized = normalizeScanBody(req.body);
+    const normalized = enrichInput(req.body);
     const {
       jobTitle, companyName, jobDescription, salary, location, jobType,
       recruiterName, recruiterEmail, phoneNumber, website, applyLink, experience, skills
@@ -137,7 +166,7 @@ const scanJob = async (req, res) => {
  */
 const analyzeJob = async (req, res) => {
   try {
-    const normalized = normalizeScanBody(req.body || {});
+    const normalized = enrichInput(req.body || {});
     const result = await detect(normalized);
     const companyVerification = await getCompanyVerification(normalized).catch(() => null);
     result.companyVerification = companyVerification;
