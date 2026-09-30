@@ -136,6 +136,8 @@ const verifyCompany = async (req, res) => {
         emailVerification: verification.emailVerification,
         recruiterVerification: verification.recruiterVerification,
         webInfo: verification.webInfo,
+        companyStatus: verification.companyStatus,
+        jobRisk: verification.jobRisk,
         breakdown: verification.breakdown,
         warnings: verification.warnings,
         signals,
