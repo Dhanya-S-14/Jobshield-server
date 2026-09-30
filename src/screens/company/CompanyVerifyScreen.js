@@ -43,6 +43,18 @@ const getSignalIcon = (type) => {
   }
 };
 
+const getVerdictBg = (level, colors) =>
+  level === 'suspicious' ? 'rgba(249, 115, 22, 0.15)' :
+  level === 'fraudulent' ? colors.errorLight :
+  level === 'verified' ? colors.successLight :
+  colors.warningLight;
+
+const getVerdictFg = (level, colors) =>
+  level === 'suspicious' ? '#f97316' :
+  level === 'fraudulent' ? colors.error :
+  level === 'verified' ? colors.success :
+  colors.warning;
+
 const CompanyVerifyScreen = ({ navigation }) => {
   const { colors } = useTheme();
   const { t } = useLanguage();
@@ -161,6 +173,26 @@ const CompanyVerifyScreen = ({ navigation }) => {
                     </View>
                   )}
                 </View>
+
+                {/* Separated verdicts: company status vs job risk */}
+                {(result.companyStatus || result.jobRisk) && (
+                  <View style={[styles.badgeRow, styles.verdictRow]}>
+                    {result.companyStatus ? (
+                      <View style={[styles.riskBadge, { backgroundColor: getVerdictBg(result.companyStatus.level, colors) }]}>
+                        <Text style={[styles.riskBadgeText, { color: getVerdictFg(result.companyStatus.level, colors) }]}>
+                          Company: {result.companyStatus.label}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {result.jobRisk ? (
+                      <View style={[styles.riskBadge, { backgroundColor: getVerdictBg(result.jobRisk.level, colors) }]}>
+                        <Text style={[styles.riskBadgeText, { color: getVerdictFg(result.jobRisk.level, colors) }]}>
+                          Job: {result.jobRisk.label}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                )}
               </View>
 
               {/* Company Details */}
@@ -288,6 +320,7 @@ const styles = StyleSheet.create({
   companyName: { fontSize: typography.xl, fontWeight: '700', marginBottom: spacing.xs },
   scoreLabel: { fontSize: typography.sm, fontWeight: '700', marginBottom: spacing.sm },
   badgeRow: { flexDirection: 'row', gap: 8 },
+  verdictRow: { flexWrap: 'wrap', justifyContent: 'center', marginTop: spacing.sm, marginBottom: spacing.xs },
   riskBadge: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: borderRadius.full },
   riskBadgeText: { fontSize: typography.xs, fontWeight: '700' },
   detailsCard: { padding: spacing.lg, marginBottom: spacing.md },

@@ -26,6 +26,8 @@
       "package": "com.jobshield.app",
       "permissions": [
         "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -59,6 +61,9 @@
       "enabled": true,
       "fallbackToCacheTimeout": 0
     },
-    "owner": "dhanyas14"
+    "owner": "dhanyas14",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
   }
 }

@@ -22,6 +22,32 @@ const levelMeta = {
 
 const rowColor = (colors, key) => (key === 'success' ? colors.success : key === 'warning' ? colors.warning : key === 'error' ? colors.error : colors.textMuted);
 
+const verdictColor = (colors, level) =>
+  level === 'verified' ? colors.success :
+  level === 'suspicious' ? '#f97316' :
+  level === 'fraudulent' ? colors.error :
+  colors.warning;
+
+const VerdictBadges = ({ verification, colors }) => {
+  const cs = verification.companyStatus;
+  const jr = verification.jobRisk;
+  if (!cs && !jr) return null;
+  return (
+    <View style={styles.verdictRow}>
+      {cs ? (
+        <View style={[styles.verdictBadge, { backgroundColor: verdictColor(colors, cs.level) }]}>
+          <Text style={styles.badgeText}>Company: {cs.label}</Text>
+        </View>
+      ) : null}
+      {jr ? (
+        <View style={[styles.verdictBadge, { backgroundColor: verdictColor(colors, jr.level) }]}>
+          <Text style={styles.badgeText}>Job: {jr.label}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+};
+
 const Row = ({ colors, label, status, detail }) => {
   const meta = statusMeta[status] || statusMeta.Unknown;
   const color = rowColor(colors, meta.color);
@@ -63,6 +89,8 @@ const CompanyVerificationBlock = ({ verification }) => {
           <Text style={styles.badgeText}>{lvl.label}</Text>
         </View>
       </View>
+
+      <VerdictBadges verification={verification} colors={colors} />
 
       {!!company.officialName && (
         <Text style={[styles.companyLine, { color: colors.text }]} numberOfLines={1}>
@@ -152,6 +180,8 @@ const styles = StyleSheet.create({
   badgeText: { color: '#fff', fontSize: typography.xs, fontWeight: '700' },
   companyLine: { fontSize: typography.md, fontWeight: '600', marginBottom: 2 },
   note: { fontSize: typography.xs, lineHeight: 16, marginBottom: spacing.sm },
+  verdictRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginVertical: 6 },
+  verdictBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 12 },
   row: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 7, borderBottomWidth: 1 },
   rowIcon: { marginTop: 2, marginRight: spacing.sm },
   rowBody: { flex: 1 },
