@@ -38,17 +38,21 @@ const validateLogin = [
 ];
 
 const validateScanJob = [
+  // jobTitle/companyName are optional so OCR text and typed messages can have
+  // them extracted server-side (see controllers/scanController.js enrichInput).
   body('jobTitle')
+    .optional()
     .trim()
-    .notEmpty().withMessage('Job title is required'),
+    .isLength({ max: 120 }).withMessage('Job title must be under 120 characters'),
   body('companyName')
+    .optional()
     .trim()
-    .notEmpty().withMessage('Company name is required'),
+    .isLength({ max: 120 }).withMessage('Company name must be under 120 characters'),
   body('jobDescription')
     .trim()
     .notEmpty().withMessage('Job description is required')
     .isLength({ min: 10 }).withMessage('Job description must be at least 10 characters')
-];
+  ];
 
 const validateReportScam = [
   body('companyName')
