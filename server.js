@@ -144,6 +144,15 @@ app.get('/health', (req, res) => {
   });
 });
 
+app.get('/api/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'JobShield API is running',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
 // Serve the built web app (PWA) from /public if present
 const webBuildDir = path.join(__dirname, 'public');
 if (fs.existsSync(path.join(webBuildDir, 'index.html'))) {
