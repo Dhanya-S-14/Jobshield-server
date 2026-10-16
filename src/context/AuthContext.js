@@ -27,6 +27,10 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     loadUser();
+    try {
+      const { warmUpServer } = require('../services/api');
+      warmUpServer().catch(() => {});
+    } catch {}
   }, [loadUser]);
 
   const login = async (email, password) => {

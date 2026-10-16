@@ -21,17 +21,17 @@ export const updateProfile = async (userData) => {
 };
 
 export const forgotPassword = async (email) => {
-  const response = await api.post('/auth/forgot-password', { email });
+  const response = await api.post('/auth/forgotpassword', { email });
   return response.data;
 };
 
 export const resetPassword = async (token, password) => {
-  const response = await api.put(`/auth/reset-password/${token}`, { password });
+  const response = await api.put(`/auth/resetpassword/${token}`, { password });
   return response.data;
 };
 
 export const changePassword = async (currentPassword, newPassword) => {
-  const response = await api.put('/auth/change-password', { currentPassword, newPassword });
+  const response = await api.put('/auth/updatepassword', { currentPassword, newPassword });
   return response.data;
 };
 

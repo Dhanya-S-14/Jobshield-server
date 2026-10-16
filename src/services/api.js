@@ -25,19 +25,29 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+const RETRYABLE_STATUSES = [502, 503, 504, 408];
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [2000, 5000, 10000];
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const config = error.config || {};
-    if (!error.response && !config._retried) {
-      config._retried = true;
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      try {
-        return await api(config);
-      } catch (retryErr) {
-        return Promise.reject(retryErr);
+    const status = error.response ? error.response.status : null;
+    const isNetworkError = !error.response;
+    const isRetryable = isNetworkError || RETRYABLE_STATUSES.includes(status);
+    const isRefreshable = config.url && !config.url.includes('/auth/refresh');
+
+    if (isRetryable && isRefreshable) {
+      config._retryCount = config._retryCount || 0;
+      if (config._retryCount < MAX_RETRIES) {
+        const delay = RETRY_DELAYS[config._retryCount] || 10000;
+        config._retryCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return api(config);
       }
     }
+
     if (error.response) {
       const { status, data } = error.response;
       if (status === 401) {
@@ -74,6 +84,24 @@ export const clearAuthToken = async () => {
     delete api.defaults.headers.common['Authorization'];
   } catch (error) {
     console.warn('Error clearing token:', error.message);
+  }
+};
+
+export const warmUpServer = async () => {
+  try {
+    const rootApi = axios.create({
+      baseURL: API_URL.replace(/\/api$/, ''),
+      timeout: 60000,
+    });
+    await rootApi.get('/health');
+    return true;
+  } catch {
+    try {
+      await api.get('/health', { timeout: 60000 });
+      return true;
+    } catch {
+      return false;
+    }
   }
 };
 
