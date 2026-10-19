@@ -1,6 +1,7 @@
 import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { loginUser, registerUser, getCurrentUser } from '../services/authService';
+import { setAuthToken, clearAuthToken } from '../services/api';
 
 const AuthContext = createContext(null);
 
@@ -15,6 +16,7 @@ export const AuthProvider = ({ children }) => {
       const storedToken = await AsyncStorage.getItem('token');
       const storedUser = await AsyncStorage.getItem('user');
       if (storedToken && storedUser) {
+        await setAuthToken(storedToken);
         setToken(storedToken);
         setUser(JSON.parse(storedUser));
       }
@@ -40,6 +42,7 @@ export const AuthProvider = ({ children }) => {
       const data = await loginUser(email, password);
       const userData = data.user || data;
       const authToken = data.token || data.accessToken;
+      await setAuthToken(authToken);
       setUser(userData);
       setToken(authToken);
       await AsyncStorage.setItem('token', authToken);
@@ -60,6 +63,7 @@ export const AuthProvider = ({ children }) => {
       const data = await registerUser(userData);
       const userDataResult = data.user || data;
       const authToken = data.token || data.accessToken;
+      await setAuthToken(authToken);
       setUser(userDataResult);
       setToken(authToken);
       await AsyncStorage.setItem('token', authToken);
@@ -77,6 +81,7 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
     setToken(null);
     setError(null);
+    await clearAuthToken();
     await AsyncStorage.multiRemove(['token', 'user']);
   };
 

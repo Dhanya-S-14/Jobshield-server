@@ -17,33 +17,37 @@ const RegisterScreen = ({ navigation }) => {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [acceptTerms, setAcceptTerms] = useState(true);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
+  const [registerError, setRegisterError] = useState(null);
 
   const validate = () => {
     const errs = {};
-    if (!name.trim()) errs.name = t('nameRequired');
-    if (!email.trim()) errs.email = t('emailRequired');
-    else if (!validateEmail(email.trim())) errs.email = t('invalidEmail');
-    if (!password) errs.password = t('passwordRequired');
+    if (!name.trim()) errs.name = t('nameRequired') || 'Name is required';
+    if (!email.trim()) errs.email = t('emailRequired') || 'Email is required';
+    else if (!validateEmail(email.trim().toLowerCase())) errs.email = t('invalidEmail') || 'Invalid email';
+    if (!password) errs.password = t('passwordRequired') || 'Password is required';
     else {
       const pwCheck = validatePassword(password);
       if (!pwCheck.valid) errs.password = pwCheck.message;
     }
-    if (password !== confirmPassword) errs.confirmPassword = t('passwordsDoNotMatch');
-    if (!acceptTerms) errs.terms = t('mustAcceptTerms');
+    if (password !== confirmPassword) errs.confirmPassword = t('passwordsDoNotMatch') || 'Passwords do not match';
+    if (!acceptTerms) errs.terms = t('mustAcceptTerms') || 'You must accept the terms';
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
 
   const handleRegister = async () => {
+    setRegisterError(null);
     if (!validate()) return;
     setLoading(true);
     try {
-      await register({ name: name.trim(), email: email.trim(), password });
+      await register({ name: name.trim(), email: email.trim().toLowerCase(), password });
     } catch (err) {
-      Toast.show({ type: 'error', text1: t('registrationFailed'), text2: err.message });
+      const msg = err.message || 'Registration failed. Please try again.';
+      setRegisterError(msg);
+      Toast.show({ type: 'error', text1: t('registrationFailed') || 'Registration Failed', text2: msg });
     } finally {
       setLoading(false);
     }
@@ -113,6 +117,20 @@ const RegisterScreen = ({ navigation }) => {
             </TouchableOpacity>
             {errors.terms && <Text style={[styles.errorText, { color: colors.error, marginBottom: spacing.sm }]}>{errors.terms}</Text>}
 
+            {registerError ? (
+              <View style={[styles.errorBanner, { backgroundColor: colors.error + '15', borderColor: colors.error + '40' }]}>
+                <Ionicons name="alert-circle" size={18} color={colors.error} style={{ marginRight: 8 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.errorBannerText, { color: colors.error }]}>{registerError}</Text>
+                  {registerError.toLowerCase().includes('already exists') && (
+                    <TouchableOpacity onPress={() => navigation.navigate('Login')} style={{ marginTop: 6 }}>
+                      <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13 }}>👉 Tap here to Sign In instead</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ) : null}
+
             <TouchableOpacity style={[styles.registerButton, { backgroundColor: colors.primary, opacity: loading ? 0.7 : 1 }]} onPress={handleRegister} disabled={loading}>
               {loading ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
@@ -151,6 +169,8 @@ const styles = StyleSheet.create({
   input: { flex: 1, paddingVertical: 14, fontSize: typography.base },
   eyeButton: { padding: spacing.xs },
   errorText: { fontSize: typography.xs, marginTop: 4, marginLeft: 2 },
+  errorBanner: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: borderRadius.md, borderWidth: 1, marginBottom: spacing.md },
+  errorBannerText: { flex: 1, fontSize: typography.sm, fontWeight: '500' },
   termsRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
   checkbox: { width: 22, height: 22, borderRadius: 4, borderWidth: 2, justifyContent: 'center', alignItems: 'center', marginRight: spacing.sm },
   termsText: { fontSize: typography.sm, flex: 1, lineHeight: 20 },

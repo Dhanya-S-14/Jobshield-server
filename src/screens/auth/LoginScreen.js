@@ -17,6 +17,7 @@ const LoginScreen = ({ navigation }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
+  const [loginError, setLoginError] = useState(null);
 
   const validate = () => {
     const errs = {};
@@ -27,13 +28,27 @@ const LoginScreen = ({ navigation }) => {
     return Object.keys(errs).length === 0;
   };
 
-  const handleLogin = async () => {
-    if (!validate()) return;
+  const handleLogin = async (overrideEmail, overridePassword) => {
+    setLoginError(null);
+    const targetEmail = (overrideEmail !== undefined ? overrideEmail : email).trim().toLowerCase();
+    const targetPassword = overridePassword !== undefined ? overridePassword : password;
+
+    if (!overrideEmail) {
+      const errs = {};
+      if (!targetEmail) errs.email = t('emailRequired') || 'Email is required';
+      else if (!validateEmail(targetEmail)) errs.email = t('invalidEmail') || 'Invalid email';
+      if (!targetPassword) errs.password = t('passwordRequired') || 'Password is required';
+      setErrors(errs);
+      if (Object.keys(errs).length > 0) return;
+    }
+
     setLoading(true);
     try {
-      await login(email.trim(), password);
+      await login(targetEmail, targetPassword);
     } catch (err) {
-      Toast.show({ type: 'error', text1: t('loginFailed'), text2: err.message });
+      const msg = err.message || 'Login failed. Please check your credentials.';
+      setLoginError(msg);
+      Toast.show({ type: 'error', text1: t('loginFailed') || 'Login Failed', text2: msg });
     } finally {
       setLoading(false);
     }
@@ -97,9 +112,16 @@ const LoginScreen = ({ navigation }) => {
               <Text style={[styles.forgotText, { color: colors.primary }]}>{t('forgotPassword')}</Text>
             </TouchableOpacity>
 
+            {loginError ? (
+              <View style={[styles.errorBanner, { backgroundColor: colors.error + '15', borderColor: colors.error + '40' }]}>
+                <Ionicons name="alert-circle" size={18} color={colors.error} style={{ marginRight: 8 }} />
+                <Text style={[styles.errorBannerText, { color: colors.error }]}>{loginError}</Text>
+              </View>
+            ) : null}
+
             <TouchableOpacity
               style={[styles.loginButton, { backgroundColor: colors.primary, opacity: loading ? 0.7 : 1 }]}
-              onPress={handleLogin}
+              onPress={() => handleLogin()}
               disabled={loading}
             >
               {loading ? (
@@ -107,6 +129,19 @@ const LoginScreen = ({ navigation }) => {
               ) : (
                 <Text style={styles.loginButtonText}>{t('signIn')}</Text>
               )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.demoButton, { borderColor: colors.primary, backgroundColor: colors.primaryLight + '15', opacity: loading ? 0.7 : 1 }]}
+              onPress={() => {
+                setEmail('demo@jobshield.com');
+                setPassword('Password123!');
+                handleLogin('demo@jobshield.com', 'Password123!');
+              }}
+              disabled={loading}
+            >
+              <Ionicons name="flash" size={18} color={colors.primary} style={{ marginRight: 6 }} />
+              <Text style={[styles.demoButtonText, { color: colors.primary }]}>Quick Demo Login (1-Tap)</Text>
             </TouchableOpacity>
 
             <View style={styles.footerRow}>
@@ -139,10 +174,14 @@ const styles = StyleSheet.create({
   input: { flex: 1, paddingVertical: 14, fontSize: typography.base },
   eyeButton: { padding: spacing.xs },
   errorText: { fontSize: typography.xs, marginTop: 4, marginLeft: 2 },
+  errorBanner: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: borderRadius.md, borderWidth: 1, marginBottom: spacing.md },
+  errorBannerText: { flex: 1, fontSize: typography.sm, fontWeight: '500' },
   forgotButton: { alignSelf: 'flex-end', marginBottom: spacing.lg },
   forgotText: { fontSize: typography.sm, fontWeight: '600' },
   loginButton: { paddingVertical: 16, borderRadius: borderRadius.md, alignItems: 'center', justifyContent: 'center' },
   loginButtonText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '700' },
+  demoButton: { flexDirection: 'row', paddingVertical: 14, borderRadius: borderRadius.md, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', marginTop: spacing.md },
+  demoButtonText: { fontSize: typography.base, fontWeight: '700' },
   footerRow: { flexDirection: 'row', justifyContent: 'center', marginTop: spacing.lg },
   footerText: { fontSize: typography.md },
   footerLink: { fontSize: typography.md, fontWeight: '700' },

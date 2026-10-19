@@ -12,6 +12,10 @@ const api = axios.create({
 
 api.interceptors.request.use(
   async (config) => {
+    // Prevent duplicate /api when API_URL already ends with /api
+    if (config.url && config.baseURL?.endsWith('/api') && config.url.startsWith('/api/')) {
+      config.url = config.url.substring(4);
+    }
     try {
       const token = await AsyncStorage.getItem('token');
       if (token) {
@@ -50,13 +54,14 @@ api.interceptors.response.use(
 
     if (error.response) {
       const { status, data } = error.response;
-      if (status === 401) {
+      const isLoginOrRegister = config.url && (config.url.includes('/auth/login') || config.url.includes('/auth/register'));
+      if (status === 401 && !isLoginOrRegister) {
         await AsyncStorage.multiRemove(['token', 'user']);
       }
       const message = data?.message || data?.error || 'An error occurred';
       return Promise.reject(new Error(message));
     }
-    return Promise.reject(new Error('Network error. Please check your connection and try again.'));
+    return Promise.reject(new Error('Cannot reach JobShield server. If the server is starting up, please wait a moment and try again.'));
   }
 );
 
