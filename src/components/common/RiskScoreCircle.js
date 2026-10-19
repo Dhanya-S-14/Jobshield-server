@@ -40,13 +40,21 @@ const RiskScoreCircle = ({ score, size = 120, strokeWidth = 10, showLabel = true
         />
       </Svg>
       <View style={styles.content}>
-        <Text style={[styles.score, { color: riskColor, fontSize: size * 0.22 }]}>
-          {score !== null && score !== undefined ? score : '?'}
-        </Text>
-        <Text style={[styles.percent, { color: colors.textMuted, fontSize: size * 0.1 }]}>%</Text>
+        <View style={styles.scoreRow}>
+          <Text style={[styles.score, { color: riskColor, fontSize: size * 0.24 }]}>
+            {score !== null && score !== undefined ? score : '?'}
+          </Text>
+          <Text style={[styles.percent, { color: riskColor, fontSize: size * 0.11 }]}>%</Text>
+        </View>
+        <Text style={[styles.metricLabel, { color: colors.textMuted, fontSize: size * 0.08 }]}>RISK</Text>
       </View>
       {showLabel && (
-        <Text style={[styles.label, { color: riskColor, fontSize: size * 0.1 }]}>{label}</Text>
+        <View style={styles.labelWrapper}>
+          <Text style={[styles.label, { color: riskColor, fontSize: size * 0.1 }]}>{label}</Text>
+          <Text style={[styles.safetyText, { color: colors.textSecondary, fontSize: size * 0.085 }]}>
+            {score <= 25 ? `🛡️ ${100 - score}% Safe` : score <= 50 ? `⚠️ ${100 - score}% Trust` : `🚫 ${score}% Scam Risk`}
+          </Text>
+        </View>
       )}
     </View>
   );
@@ -59,21 +67,38 @@ const styles = StyleSheet.create({
   },
   content: {
     position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scoreRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
   },
   score: {
-    fontWeight: '800',
+    fontWeight: '900',
+    letterSpacing: -0.5,
   },
   percent: {
-    fontWeight: '600',
+    fontWeight: '700',
     marginLeft: 1,
   },
+  metricLabel: {
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    marginTop: -2,
+  },
+  labelWrapper: {
+    alignItems: 'center',
+    marginTop: 6,
+  },
   label: {
-    fontWeight: '700',
-    marginTop: 4,
-    letterSpacing: 0.5,
+    fontWeight: '800',
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
+  },
+  safetyText: {
+    fontWeight: '600',
+    marginTop: 2,
   },
 });
 

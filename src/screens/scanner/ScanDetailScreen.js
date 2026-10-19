@@ -17,6 +17,7 @@ import Loader from '../../components/common/Loader';
 import { CommentSection } from '../../components/comments/Comments';
 import { ScanWarnings } from '../../components/warning/WarningBanner';
 import CompanyVerificationBlock from './CompanyVerificationBlock';
+import ApplicationVerdictCard from '../../components/scanner/ApplicationVerdictCard';
 
 const ScanDetailScreen = ({ route, navigation }) => {
   const { colors } = useTheme();
@@ -191,6 +192,8 @@ const ScanDetailScreen = ({ route, navigation }) => {
         </Card>
 
         <CompanyVerificationBlock verification={scan.companyVerification} />
+
+        <ApplicationVerdictCard scan={scan} />
 
         <ScanWarnings companyName={scan.companyName} jobDescription={scan.jobDescription} />
 

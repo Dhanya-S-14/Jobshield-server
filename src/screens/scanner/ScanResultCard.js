@@ -33,7 +33,12 @@ const ScanResultCard = ({ scan, onPress, compact = false }) => {
         <View style={styles.cardInfo}>
           <Text style={[styles.companyName, { color: colors.text }]} numberOfLines={1}>{scan.companyName}</Text>
           <Text style={[styles.jobTitle, { color: colors.textSecondary }]} numberOfLines={1}>{scan.jobTitle}</Text>
-          <RiskBadge level={level} size="sm" />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+            <RiskBadge level={level} size="sm" />
+            <Text style={{ fontSize: 11, fontWeight: '700', color: level === 'Safe' ? (colors.success || '#10B981') : level === 'Suspicious' ? (colors.warning || '#F59E0B') : (colors.error || '#EF4444') }}>
+              {level === 'Safe' ? '• OK to Apply' : level === 'Suspicious' ? '• Caution' : '• Do Not Apply'}
+            </Text>
+          </View>
         </View>
       </View>
       <View style={[styles.cardFooter, { borderTopColor: colors.borderLight }]}>

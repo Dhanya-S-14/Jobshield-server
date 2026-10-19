@@ -14,6 +14,7 @@ import Button from '../../components/common/Button';
 import RiskScoreCircle from '../../components/common/RiskScoreCircle';
 import RiskBadge from '../../components/common/RiskBadge';
 import CompanyVerificationBlock from './CompanyVerificationBlock';
+import ApplicationVerdictCard from '../../components/scanner/ApplicationVerdictCard';
 import { getRiskLevel } from '../../utils/helpers';
 
 const PARSED_FIELDS = [
@@ -194,6 +195,7 @@ const ScreenshotScanScreen = ({ navigation }) => {
             </Text>
           </Card>
           <CompanyVerificationBlock verification={result.companyVerification} />
+          <ApplicationVerdictCard scan={result} />
           <View style={styles.resultActions}>
             <Button title="Scan Another" icon="refresh-outline" variant="outline" onPress={resetAll} style={styles.resultBtn} />
           </View>
