@@ -100,7 +100,10 @@ app.use(helmet({
 
 // CORS
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // Allow all origins including mobile apps (origin is undefined/null) and web
+    callback(null, true);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -131,8 +134,32 @@ app.use(cookieParser());
 app.use(mongoSanitize());
 app.use(xssClean);
 
+// APK Download Route
+const serveApkDownload = (req, res) => {
+  const candidatePaths = [
+    path.resolve(__dirname, 'public', 'JobShield.apk'),
+    path.resolve(__dirname, 'public', 'JobShield-latest.apk'),
+    path.resolve(__dirname, '..', 'JobShield-latest.apk'),
+    path.resolve(__dirname, '..', 'JobShield.apk')
+  ];
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) {
+      res.setHeader('Content-Disposition', 'attachment; filename="JobShield.apk"');
+      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      return res.sendFile(p);
+    }
+  }
+  return res.status(404).json({ success: false, message: 'JobShield APK file not found on server' });
+};
+
+app.get('/download/app', serveApkDownload);
+app.get('/download/JobShield.apk', serveApkDownload);
+app.get('/api/download/app', serveApkDownload);
+app.get('/JobShield.apk', serveApkDownload);
+
 // Routes
 app.use('/api', routes);
+app.use('/api/api', routes); // Gracefully handle accidental double /api from misconfigured clients
 
 // Health check
 app.get('/health', (req, res) => {
